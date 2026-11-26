@@ -7,7 +7,7 @@ import { failure } from "../../api/http";
 import type { ProjectOut } from "../api/types";
 import type { OwnerKind } from "../dashboards/schema";
 import type { DashboardOwner } from "../dashboards/runPanel";
-import { CATALOG_STALE_MS, catalogKey, getCatalog, type CatalogOut } from "./api";
+import { CATALOG_STALE_MS, catalogKey, getCatalog, type CatalogOut, type CatalogState } from "./api";
 
 export type OwnerMetric = {
   name: string;
@@ -35,6 +35,12 @@ export type OwnerCatalog = {
   builtAt: number | null;
   problems: string[];
   notes: string[];
+  /** The same notes by the type of source that gave them (a Prometheus note is never for a logs list). */
+  notesBy: { prometheus: string[]; loki: string[] };
+  /** The smallest window (seconds) the Loki sources read their streams over; `null` without a Loki. */
+  streamWindowSeconds: number | null;
+  /** Each source's build state, by source id (a project owner's; a name is judged missing only from an `ok` one). */
+  sourceStates?: Record<string, CatalogState>;
 };
 
 export type CatalogPart = { project: ProjectOut; catalog: CatalogOut | null; error: string | null };
@@ -70,18 +76,29 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
   const streams = new Map<string, { values: Set<string>; sourceId: string | null; projectIds: string[] }>();
   const problems: string[] = [];
   const notes: string[] = [];
+  const notesBy: OwnerCatalog["notesBy"] = { prometheus: [], loki: [] };
   let hasPrometheus = false;
   let hasLoki = false;
+  let streamWindowSeconds: number | null = null;
   let builtAt: number | null = null;
+  const sourceStates: Record<string, CatalogState> = {};
 
   for (const part of parts) {
     const where = group ? `${part.project.name}: ` : "";
     if (part.error !== null) problems.push(`${where}${part.error}`);
     for (const src of part.catalog?.sources ?? []) {
+      sourceStates[src.source_id] = src.state;
       if (src.source_type === "prometheus") hasPrometheus = true;
-      if (src.source_type === "loki") hasLoki = true;
+      if (src.source_type === "loki") {
+        hasLoki = true;
+        const w = src.stream_window_seconds;
+        if (w !== null && w !== undefined && (streamWindowSeconds === null || w < streamWindowSeconds)) streamWindowSeconds = w;
+      }
       if (src.state !== "ok" && src.message) problems.push(`${where}${src.source_name}: ${src.message}`);
-      src.notes.forEach((n) => add(notes, n));
+      src.notes.forEach((n) => {
+        add(notes, n);
+        if (src.source_type === "prometheus" || src.source_type === "loki") add(notesBy[src.source_type], n);
+      });
       const built = Date.parse(src.built_at);
       if (!Number.isNaN(built) && (builtAt === null || built < builtAt)) builtAt = built;
     }
@@ -114,7 +131,7 @@ export function ownerCatalog(parts: CatalogPart[], ownerKind: OwnerKind): OwnerC
     streams: [...streams.entries()]
       .sort(([a], [b]) => byText(a, b))
       .map(([name, s]) => ({ name, values: sorted(s.values), sourceId: s.sourceId, projectIds: s.projectIds })),
-    hasPrometheus, hasLoki, builtAt, problems, notes,
+    hasPrometheus, hasLoki, builtAt, problems, notes, notesBy, streamWindowSeconds, sourceStates,
   };
 }
 

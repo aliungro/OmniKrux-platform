@@ -997,3 +997,21 @@ def test_an_unread_alert_that_no_longer_fits_its_panel_is_said_to_go():
     doc = {"panels": [_alert_panel(other), _alert_panel(None, id="p-2", x=12)]}
     out, items = update._keep_unread_alerts(doc, current)
     assert [p["alert"] for p in out["panels"]] == [other, None] and items == []
+
+
+async def test_update_with_no_new_version_says_so(
+    monitoring_app, linked_project, fake_grafana_auth
+):
+    """A Grafana still at the version this dashboard took has nothing new, even when the
+    dashboard was edited here (so it isn't `same`)."""
+    http, _ = monitoring_app
+    raw = with_last_reducer(load("gridpos_v22_inputs"))
+    did, _ = await from_grafana(http, fake_grafana_auth, linked_project.project_id, raw)
+    p = await update_preview(http, did)
+    assert p["no_new_version"] is True
+    assert p["source_version"] == p["previous_source_version"] == raw["version"]
+    fake_grafana_auth.dashboards["api-lat"] = grafana_entry(
+        upstream(raw, raw["version"] + 1, panel_title="Renamed")
+    )
+    changed = await update_preview(http, did)
+    assert changed["no_new_version"] is False

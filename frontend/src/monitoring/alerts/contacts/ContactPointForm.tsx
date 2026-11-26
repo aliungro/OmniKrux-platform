@@ -44,6 +44,12 @@ const SECRETS: Record<ContactPointType, SecretSpec[]> = {
 
 type FieldKey = "name" | "username" | "host" | "port" | "from_address" | "to" | "events_url" | `secrets.${string}`;
 
+/** The server's words about an address a webhook is sent to: said under that address's field. */
+export const SLACK_ADDRESS = "Use a Slack webhook address that starts with https://hooks.slack.com/.";
+const ADDRESS_WORDS: readonly string[] = [SLACK_ADDRESS, "Use an http or https address.", "Use an address without a user name or password in it."];
+/** The address secret of each type that sends to one. */
+const ADDRESS_SECRET: Partial<Record<ContactPointType, string>> = { slack: "webhook_url", teams: "webhook_url", webhook: "url" };
+
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 
 interface Plain { type: ContactPointType; name: string; host: string; port: string; security: string; username: string; from: string; to: string; eventsUrl: string }
@@ -90,7 +96,13 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
 
   const type = plain.type;
   const stored = initial?.secrets_set ?? [];
-  const edit = (patch: Partial<Plain>) => { setPlain((p) => ({ ...p, ...patch })); setErrors({}); };
+  // A change answers what was said about the old values: their errors and a failed test's words go.
+  const forget = () => {
+    setErrors({});
+    setFormError(null);
+    setResult((r) => (r && !r.ok ? null : r));
+  };
+  const edit = (patch: Partial<Plain>) => { setPlain((p) => ({ ...p, ...patch })); forget(); };
   const typedSecret = Object.values(secrets).some((v) => v !== "") || Object.values(removed).some(Boolean);
   const changed = typedSecret || JSON.stringify(plain) !== JSON.stringify(start);
   const guard = useLeaveGuard(leaveRef, changed, busy,
@@ -137,7 +149,9 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
   const refused = (err: unknown) => {
     const e = err as AlertRequestError;
     const secret = e.field && e.field.startsWith("secrets.") ? (e.field as FieldKey) : null;
+    const address = ADDRESS_SECRET[type];
     if (secret && fields.current.has(secret)) fail(secret, e.message);
+    else if (address && ADDRESS_WORDS.includes(e.message) && fields.current.has(`secrets.${address}`)) fail(`secrets.${address}`, e.message);
     else if (e.status === 409) fail("name", e.message); // the only conflict a save can answer is a name already taken
     else setFormError(failure(err, "try again"));
   };
@@ -229,14 +243,17 @@ export function ContactPointForm({ initial, onDone, leaveRef, tabId }: ContactPo
     const id = `${ids}-${key}`;
     const saved = stored.includes(spec.key);
     const hint = saved ? `${id}-h` : undefined;
-    const describedBy = [hint, err(key) ? `${id}-e` : undefined].filter(Boolean).join(" ") || undefined;
+    // The stored address's problem (a Slack address that isn't Slack's), until a new one is typed.
+    const problem = saved && spec.key === ADDRESS_SECRET[type] && !(secrets[spec.key] ?? "") ? initial?.problem ?? null : null;
+    const describedBy = [hint, problem ? `${id}-p` : undefined, err(key) ? `${id}-e` : undefined].filter(Boolean).join(" ") || undefined;
     return (
       <div className={s.field} key={spec.key}>
         <label className={s.label} htmlFor={id}>{spec.label}</label>
         <input id={id} ref={setRef(key)} className={s.input} type="password" autoComplete="new-password" spellCheck={false}
           value={secrets[spec.key] ?? ""} aria-invalid={err(key) ? true : undefined} aria-describedby={describedBy} disabled={removed[spec.key] || undefined}
-          onChange={(e) => { setSecrets((cur) => ({ ...cur, [spec.key]: e.target.value })); setErrors({}); }} />
+          onChange={(e) => { setSecrets((cur) => ({ ...cur, [spec.key]: e.target.value })); forget(); }} />
         {saved && <span id={`${id}-h`} className={s.hint}>{removed[spec.key] ? `The saved ${spec.noun} is removed when you save.` : KEEP_HINT}</span>}
+        {problem && <span id={`${id}-p`} className={s.stored} data-tone="warn">{problem}</span>}
         {saved && !spec.required && (
           <label className={s.check}>
             <input type="checkbox" checked={!!removed[spec.key]}

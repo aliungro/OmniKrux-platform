@@ -51,7 +51,11 @@ from omnikrux.actions.pipeline import (
 from omnikrux.exec.debug import finish_even_if_cancelled
 from omnikrux.kube.http import call_json
 from omnikrux.kube.pods import REQUEST_TIMEOUT
-from omnikrux.monitoring.alerts.rule_expr import duration_text, to_prometheus_template
+from omnikrux.monitoring.alerts.rule_expr import (
+    duration_text,
+    same_query_text,
+    to_prometheus_template,
+)
 from omnikrux.monitoring.alerts.store import (
     HistoryKind,
     HistoryRecord,
@@ -656,7 +660,7 @@ class PrometheusRuleAction:
                 and not row.leaving
                 and row.engine == "tool"
                 and row.tool_kind == "prometheus_rule"
-                and row.rule_text == target.rule_text
+                and same_query_text(row.rule_text, target.rule_text)
             )
             mark_unread(row, now())
             await alerts.set_tool(

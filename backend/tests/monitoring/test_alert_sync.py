@@ -20,6 +20,7 @@ from omnikrux.monitoring.alerts.engine import AlertEngine, no_source_copy
 from omnikrux.monitoring.alerts.store import AlertStore, HistoryRecord, RuleSpec
 from omnikrux.monitoring.alerts.sync import UNKNOWN_CAPABILITY, AlertSync
 from omnikrux.monitoring.alerts.types import Condition, Engine
+from omnikrux.monitoring.models import AlertTargetRow
 from omnikrux.monitoring.projects.types import Matcher
 from omnikrux.monitoring.sources.capability import CapabilityCache, CapabilityUnknown
 from omnikrux.monitoring.sources.connector import AlertingCapability, ConnectorRegistry
@@ -52,7 +53,7 @@ async def test_each_project_gets_its_own_filter(monitoring_app, two_projects_on_
 
     first, second = await services.alert_sync.desired(rule)
     texts = {first.project_id: first.rule_text, second.project_id: second.rule_text}
-    assert texts[pair.a] == ('(sum by (route) (rate(errors{job="api",cluster="a"}[5m]))\n) > 1')
+    assert texts[pair.a] == ('(sum by (route) (rate(errors{job="api",cluster="a"}[5m]))) > 1')
     assert 'cluster="b"' not in texts[pair.a]
     assert 'cluster="b"' in texts[pair.b] and 'cluster="a"' not in texts[pair.b]
     # OmniKrux runs the query as written: `run_query` adds the project's filter at each check.
@@ -61,9 +62,9 @@ async def test_each_project_gets_its_own_filter(monitoring_app, two_projects_on_
 
     total = replace(rule, condition=Condition("total", "below", 0.5, 0, 60))
     [a_spec] = [s for s in await services.alert_sync.desired(total) if s.project_id == pair.a]
-    assert a_spec.eval_expr == f"sum({rule.expr}\n)"
+    assert a_spec.eval_expr == f"sum({rule.expr})"
     assert a_spec.rule_text.startswith("sum(sum by (route)") and a_spec.rule_text.endswith(
-        "\n) < 0.5"
+        ")) < 0.5"
     )
 
 
@@ -469,3 +470,48 @@ async def test_a_reconcile_cancelled_while_writing_finishes_the_hand_over(
     # Both targets were written, and both were handed to the tool sync before it stopped.
     assert sorted(handed) == sorted([pair.a, pair.b])
     assert len(await services.alerts.targets(rule_id=rule.id)) == 2
+
+
+async def test_a_stored_rule_with_extra_whitespace_stays_applied(
+    monitoring_app, two_projects_on_one_source
+):
+    """A rule saved before queries were tidied keeps its applied text: a reconcile (as at the
+    first start after an upgrade) neither rewrites it nor sends it to a review."""
+    _, app = monitoring_app
+    services = app.state.monitoring
+    alerts, sync = services.alerts, services.alert_sync
+    pair = two_projects_on_one_source
+
+    async def get(source, *, refresh=False):
+        return AlertingCapability(True, "prometheus_rule", None)
+
+    services.capabilities.get = get
+    rule = await alerts.create_rule(
+        spec("project", pair.a, engine="tool", expr="\n  sum(rate(errors[5m]))\n\n")
+    )
+    await sync.reconcile_rule(rule.id)
+    [target] = await alerts.targets(rule_id=rule.id)
+    assert target.rule_text.startswith("(sum(rate(") and "\n\n" not in target.rule_text
+    # As stored before the upgrade: the query as typed inside the wrapper.
+    old = target.rule_text.replace("(sum", "(\n  sum", 1).replace(")) >", ")\n\n\n) >")
+    async with services.sessionmaker.begin() as session:
+        row = await session.get(AlertTargetRow, target.id)
+        row.rule_text = old
+    await alerts.set_tool(
+        target.id, tool_state="in_sync", tool_message=None, applied_version=rule.version
+    )
+
+    assert await sync.reconcile_rule(rule.id) == []
+    await sync.reconcile_all()
+    [kept] = await alerts.targets(rule_id=rule.id)
+    assert kept.rule_text == old and kept.tool_state == "in_sync"
+
+    # A real change still writes the new, tidy text.
+    changed = await alerts.update_rule(
+        rule.id,
+        replace(spec("project", pair.a, engine="tool"), expr="sum(rate(errors[1m]))\n\n"),
+        base_version=rule.version,
+    )
+    await sync.reconcile_rule(changed.id, changed=True)
+    [moved] = await alerts.targets(rule_id=rule.id)
+    assert "[1m]" in moved.rule_text and "\n\n" not in moved.rule_text

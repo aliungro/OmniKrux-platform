@@ -2,6 +2,10 @@
 the name of the cluster it is reached through. None of these ever carries a secret, a response
 body or (for cloud clusters) the cluster's endpoint."""
 
+from aiohttp import ClientConnectorError
+
+from omnikrux.kube.connections import kube_error_message
+
 REFUSED = "Can't reach {name}: the connection was refused. Check the address and that the tool is running."
 NO_HOST = "Can't reach {name}: its host name doesn't resolve. Check the address."
 TIMEOUT = (
@@ -22,3 +26,22 @@ BAD_ADDRESS = (
 )
 BAD_HEADER = "{name} has a header OmniKrux can't send. Check the source's custom headers."
 CLUSTER_AUTH = "{name} is reached through a cluster, which can't send credentials or custom headers. Set Authentication to None and remove the headers."
+CLUSTER_UNREACHABLE = (
+    "OmniKrux can't reach {cluster}. Check that the cluster is running, then try again."
+)
+
+
+SOURCE_CLUSTER_DOWN = (
+    "Can't reach {cluster}, so {name} can't be read. Check that the cluster is running."
+)
+
+
+def cluster_words(
+    exc: Exception, cluster_name: str, action: str, unreachable: str | None = None
+) -> str:
+    """The words for a failed call to a (non-cloud) cluster. A cluster that can't be connected
+    to is named plainly (no errno, no address): `unreachable`, or `CLUSTER_UNREACHABLE`; anything
+    else is `kube_error_message`'s, which the Kubernetes app shares."""
+    if isinstance(exc, ClientConnectorError | ConnectionError):
+        return unreachable or CLUSTER_UNREACHABLE.format(cluster=cluster_name)
+    return kube_error_message(exc, action)

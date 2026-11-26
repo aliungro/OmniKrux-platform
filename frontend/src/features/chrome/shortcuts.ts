@@ -45,8 +45,8 @@ export type ShortcutId =
   | "sessionTabs"
   | "confirmReview"
   | "monitoringFind" | "monitoringTree" | "monitoringNewDashboard" | "monitoringImport"
-  | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave"
-  | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelLeave"
+  | "dashboardEdit" | "dashboardViews" | "dashboardTime" | "dashboardRefresh" | "dashboardSave" | "dashboardUndo"
+  | "panelFocus" | "panelMove" | "panelResize" | "panelSettings" | "panelAdd" | "panelRemove" | "panelDuplicate" | "panelLeave"
   | "queryRun" | "chartCrosshair" | "tableSort" | "logLabels" | "addPanelPick" | "suggestionsFocus"
   | "exploreQuery" | "exploreBrowse" | "exploreLogs" | "exploreTime" | "exploreRun" | "exploreAdd" | "exploreWindow" | "exploreShowAll"
   | "alertsViews" | "alertsMove" | "alertSilence" | "alertsDetails" | "alertsList" | "alertsSave";
@@ -142,7 +142,8 @@ export const SHORTCUTS: readonly Shortcut[] = [
   // In the dock.
   { id: "layout", scope: "dock", keys: ["Ctrl \\"], match: ["\\"], code: ["Backslash"], ctrl: true, label: "Switch the bottom dock between one pane and side by side" },
   // In the Monitoring app; the "?" sheet lists them only there.
-  { id: "monitoringFind", scope: "monitoring", keys: ["/"], match: ["/"], label: "Find a project, group or source" },
+  // Ctrl K comes here too while Monitoring is shown (Shell sends it to Monitoring's Find).
+  { id: "monitoringFind", scope: "monitoring", keys: ["/", "Ctrl K"], macKeys: ["/", "⌘ K"], match: ["/"], label: "Find a project, group or source" },
   { id: "monitoringTree", scope: "monitoring", keys: ["↑ ↓", "← →", "Enter"], label: "In the sidebar: move, close or open a group, open the item" },
   { id: "monitoringNewDashboard", scope: "monitoring", keys: ["N"], match: ["n", "N"], label: "New dashboard" },
   { id: "monitoringImport", scope: "monitoring", keys: ["I"], match: ["i", "I"], label: "Import dashboards" },
@@ -152,15 +153,17 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "dashboardTime", scope: "dashboard", keys: ["t"], match: ["t"], label: "Pick the time range" },
   { id: "dashboardRefresh", scope: "dashboard", keys: ["r"], match: ["r"], label: "Refresh now" },
   { id: "dashboardSave", scope: "dashboard", keys: ["Ctrl S"], macKeys: ["⌘ S"], match: ["s", "S"], ctrl: true, label: "While editing (in fields too): save the dashboard" },
+  { id: "dashboardUndo", scope: "dashboard", keys: ["Ctrl Z"], macKeys: ["⌘ Z"], match: ["z", "Z"], ctrl: true, label: "While editing: undo the last change" },
   { id: "panelFocus", scope: "dashboard", keys: ["← → ↑ ↓"], match: ARROWS, label: "While editing: move between panels" },
   { id: "panelMove", scope: "dashboard", keys: ["Shift ← → ↑ ↓"], match: ARROWS, shift: true, label: "While editing: move the panel one step" },
   { id: "panelResize", scope: "dashboard", keys: ["Ctrl Shift ← → ↑ ↓"], macKeys: ["⌘ Shift ← → ↑ ↓"], match: ARROWS, ctrl: true, shift: true, label: "While editing: make the panel narrower, wider, shorter or taller" },
   { id: "panelSettings", scope: "dashboard", keys: ["Enter"], match: ["Enter"], label: "While editing: open the panel's settings" },
   { id: "panelAdd", scope: "dashboard", keys: ["a"], match: ["a"], label: "While editing: add a panel (type what you want to see)" },
-  { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓", "Enter"], match: ["ArrowUp", "ArrowDown", "Enter"], label: "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)" },
-  { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing a new dashboard: go to the suggestions" },
+  { id: "addPanelPick", scope: "dashboard", keys: ["↑ ↓ ← →", "Enter"], match: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"], label: "In Add panel: move between results by row or card and add one (Ctrl+End: Empty panel; Esc clears, then closes)" },
+  { id: "suggestionsFocus", scope: "dashboard", keys: ["s"], match: ["s"], label: "While editing: show the suggestions and go to them" },
   // Matched with isDeleteKey, like deleteFocused.
   { id: "panelRemove", scope: "dashboard", keys: ["Ctrl Del"], macKeys: ["⌘ ⌫"], label: "While editing: remove the panel from the draft" },
+  { id: "panelDuplicate", scope: "dashboard", keys: ["d"], match: ["d"], label: "While editing: duplicate the panel" },
   { id: "panelLeave", scope: "dashboard", keys: ["Esc"], match: ["Escape"], label: "Close the panel's settings, then go to Save dashboard" },
   { id: "queryRun", scope: "dashboard", keys: ["Ctrl Enter"], macKeys: ["⌘ Enter"], match: ["Enter"], ctrl: true, label: "In a query: run it now; in the JSON: review the changes" },
   { id: "chartCrosshair", scope: "dashboard", keys: ["← →"], match: ["ArrowLeft", "ArrowRight"], label: "On a chart: move the crosshair; Esc hides it" },
@@ -251,15 +254,19 @@ const GROUP_TITLES: Record<Shortcut["scope"], string> = { shell: "Apps and tabs"
 
 /**
  * The "?" sheet: every group, each with its shortcuts; `kindKey` narrows the row keys to that kind's.
- * The Monitoring, Dashboards, Explore and Alerts groups are there only while Monitoring is shown (`app`); there "/"
- * is Find, so the Anywhere group leaves out Filter rows.
+ * The Monitoring, Dashboards, Explore and Alerts groups are there only while Monitoring is shown (`app`).
+ * Monitoring has no table, kinds or palette: its sheet leaves out the Table group and those rows
+ * ("/" and Ctrl K are its Find), and lists Alt+Down (into the logs) under Anywhere.
  */
 export function allGroups(kindKey?: string, app?: AppId): ShortcutGroup[] {
   const monitoring = app === "monitoring";
-  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "alerts", "row", "logs", "global", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const scopes: Shortcut["scope"][] = monitoring ? ["shell", "monitoring", "dashboard", "explore", "alerts", "global", "logs", "dock"] : ["shell", "row", "logs", "global", "dock"];
+  const shown = (s: Shortcut, scope: Shortcut["scope"]) => monitoring
+    ? (s.scope === scope || (scope === "global" && s.id === "enterLogs")) && !["moveKind", "kinds", "palette", "filter"].includes(s.id)
+    : s.scope === scope;
   return scopes.map((scope) => [
     GROUP_TITLES[scope],
-    SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || appliesTo(s, kindKey)) && !(monitoring && s.id === "filter")),
+    SHORTCUTS.filter((s) => shown(s, scope) && (kindKey === undefined || appliesTo(s, kindKey))),
   ]);
 }
 

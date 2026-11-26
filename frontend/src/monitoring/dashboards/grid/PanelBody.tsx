@@ -3,6 +3,8 @@
 import { lazy, Suspense } from "react";
 import type { PanelDataResult, PanelRun } from "../runPanel";
 import type { PanelSpec } from "../schema";
+import { usePanelEmptyWords } from "../emptyReason";
+import { LOG_QUERY_IN_CHART, logQueryInChart } from "../logQueries";
 import { PANEL_COPY, PanelFailure, PanelNote } from "./PanelState";
 
 const ChartView = lazy(() => import("../../charts"));
@@ -21,15 +23,25 @@ interface Props {
 
 export function PanelBody({ panel, run, result, waiting, changeId, animate }: Props) {
   const { data } = result;
+  // Before any return (hooks keep their order): why an empty answer was empty, once it is known.
+  // A log query in a chart panel answers lines (so it is rarely empty): its note wins over any reason.
+  const logsInChart = logQueryInChart(panel);
+  // The same words the panel's settings show (one rule: the window hint, then a proved reason).
+  const reason = usePanelEmptyWords(panel, run, !waiting && data?.state === "empty", !waiting && !result.fetching, result.stale);
   // Waiting on variables, nothing read yet, or the last thing kept is from before this panel had a run.
   if (waiting || data === null || (data.state === "noQuery" && run.requests.length > 0)) {
     return <PanelNote text={PANEL_COPY.loading} busy />;
+  }
+  // Whatever it answered, a chart cannot draw lines. A failure still says what failed.
+  if (logsInChart && data.state !== "unreachable" && data.state !== "error" && data.state !== "noQuery") {
+    return <PanelNote text={LOG_QUERY_IN_CHART} />;
   }
   switch (data.state) {
     case "noQuery":
       return <PanelNote text={PANEL_COPY.noQuery} />;
     case "empty":
-      return <PanelNote text={PANEL_COPY.empty} />;
+      // The generic words stay until a reason is proved; a reason replaces them, never a "checking" line.
+      return reason ? <PanelNote text={reason} reason /> : <PanelNote text={PANEL_COPY.empty} />;
     case "unreachable":
       return <PanelFailure kind="unreachable" reason={data.problems[0]} onRetry={result.refetch} />;
     case "error":
@@ -38,7 +50,7 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
       return (
         <Suspense fallback={<PanelNote text={PANEL_COPY.loading} busy />}>
           {/* Refreshes and time changes never animate: only a newer edit count morphs (F28). */}
-          <ChartView panel={panel} data={data} range={run.range} animate={animate} changeId={changeId} />
+          <ChartView panel={panel} data={data} range={run.range} animate={animate} changeId={changeId} step={run.step} />
         </Suspense>
       );
   }

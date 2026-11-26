@@ -3,18 +3,24 @@
 // trail to jump back to. The page's state (project, source, query, time) lives in the tab's view,
 // written with `replace` after a pause, so a reload or another tab brings it back.
 // Under the chart, the log lines of the same time line (X3): a window dragged on the chart narrows them.
+// A log query on a Loki source has no chart at all: its lines are the result. One query runs at a
+// time, and everything on screen belongs to the query in the field (or, dimmed, names its own).
+// A query never runs in the wrong language: when the source's language changes under a text, the
+// text is held (nothing runs, nothing is kept) until it changes or a source of its language is back.
 
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { failure } from "../../api/http";
 import { pressed } from "../../features/chrome/shortcuts";
 import { getProject } from "../api/client";
+import type { LinkOut } from "../api/types";
 import { projectKey, useMonitoringTree } from "../api/hooks";
 import { RecommendationBar } from "../build/RecommendationBar";
-import { firstMetric, isLogQlMetric, logSelector, quickCheck } from "../build/promql";
+import { firstMetric, isLogQlMetric, logSelector, metricNames, quickCheck, severalQueries } from "../build/promql";
 import { guessUnit, humanTitle } from "../build/writeQuery";
 import { useOwnerCatalog } from "../catalog/merge";
 import { browseMetrics } from "../catalog/metrics";
+import { useEmptyReason } from "../dashboards/emptyReason";
 import { PANEL_COPY } from "../dashboards/grid/PanelState";
 import { usePrefersReducedMotion } from "../dashboards/motion";
 import { pageLetter } from "../dashboards/page/keys";
@@ -30,12 +36,13 @@ import { equalMonitoringView, type ExploreView, type MonitoringView } from "../s
 import { DEFAULT_EXPLORE_TIME, defaultExploreProject, defaultExploreSource, exploreTime } from "./exploreDefaults";
 import { AddToDashboard, type Added } from "./AddToDashboardDialog";
 import { BrowseList } from "./BrowseList";
-import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, metricMatch, writableLabel, type BuilderAction, type ExploreBuilder } from "./builderState";
+import { builderActive, builderQuery, builderReducer, EMPTY_BUILDER, isAttached, writableLabel, type BuilderAction, type ExploreBuilder } from "./builderState";
 import { LabelChips } from "./LabelChips";
 import { LinkedLogs } from "./LinkedLogs";
 import { linkedLogSelector, logMarks } from "./logLinks";
-import { FAILED_TITLE, MetaLine, QueryBar } from "./QueryBar";
+import { FAILED_TITLE, MetaLine, NO_SUCH_METRIC, QueryBar } from "./QueryBar";
 import { Trail, trailKey } from "./Trail";
+import { heldWords, languageOf, textLanguage, useLanguageHold, type Language } from "./languageHold";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
@@ -49,6 +56,8 @@ const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki", alertm
 const NARROW_QUERY = "(max-width: 959px)";
 const ADD_FIRST = "Run a query first.";
 const DEFAULT_PANEL_TITLE = "Explore query";
+/** A text that can run: it reads as one query (balanced, and not several on separate lines). */
+const runnable = (text: string) => quickCheck(text) === null && !severalQueries(text);
 
 /**
  * The page. A view that changes under it (Back, Forward, the sidebar opening Explore on another
@@ -81,6 +90,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const reduced = usePrefersReducedMotion();
   const [projectId, setProjectId] = useState(explore.project);
   const [sourceId, setSourceId] = useState(explore.source);
+  // On a project switch: the kind of source to keep when the same one isn't linked there.
+  const [keepType, setKeepType] = useState<LinkOut["source_type"] | undefined>(undefined);
   const [expr, setExpr] = useState(explore.expr ?? "");
   const [time, setTime] = useState<TimeSpec>(() => exploreTime(explore.time));
   // Bumped by an explicit run (Ctrl+Enter, Try again, the trail): "now" is read again.
@@ -88,6 +99,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const [timeOpen, setTimeOpen] = useState(false);
   // The point-and-click builder (X2) and the list that feeds it.
   const [builder, setBuilder] = useState<ExploreBuilder>(EMPTY_BUILDER);
+  // Bumped by each pick from the list: the chips start their fixed order again.
+  const [pickSeq, setPickSeq] = useState(0);
   const [narrow, setNarrow] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false));
   const [browseOpen, setBrowseOpen] = useState(false);
   // The Logs query field: `null` follows the Only chips; any edit makes it the user's own text.
@@ -118,8 +131,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const project = tree.data ? defaultExploreProject({ project: projectId }, tree.data, recent) : null;
   const projectQuery = useQuery({ queryKey: projectKey(project ?? ""), queryFn: () => getProject(project as string), enabled: project !== null });
   const projectOut = project !== null && projectQuery.data?.id === project ? projectQuery.data : null;
-  const source = projectOut ? defaultExploreSource(projectOut, sourceId) : null;
-  const language = source?.source_type === "loki" ? "LogQL" : "PromQL";
+  const source = projectOut ? defaultExploreSource(projectOut, sourceId, keepType) : null;
+  const language: Language = source ? languageOf(source.source_type) : "PromQL";
+  // A text in the other language is held (C1): nothing runs or is kept until it fits.
+  const languageHold = useLanguageHold(source, expr);
+  const { held, holding } = languageHold;
   const kind = source?.source_type === "loki" && !isLogQlMetric(expr) ? "logs" : "metrics";
   const projects = useMemo(() => [...(tree.data?.projects ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [tree.data]);
   const projectName = projects.find((p) => p.id === project)?.name ?? projectOut?.name ?? "";
@@ -132,7 +148,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     [time.from, time.to, expr, project, source?.source_id, tick],
   );
   const panelId = `explore:${tabId}`;
-  const { run, state } = useExploreRun({ project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), split: builder.split });
+  // A log query has no chart: only its lines run (below), and this run stays idle.
+  const { run, state } = useExploreRun({
+    project: projectOut, source, expr, range, kind, panelId, timeText: timeLabel(time), enabled: kind !== "logs" && !holding,
+  });
   const runNow = useCallback(() => { setTick((n) => n + 1); run(true); }, [run]);
 
   // --- the view: written a pause after a change; a replace keeps the keyboard where it is ---------
@@ -167,26 +186,55 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const [trailVersion, setTrailVersion] = useState(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const trail = useMemo(() => (project ? readTrail(project) : []), [project, trailVersion]);
+  // Each entry keeps its source's name and kind, so a chip can still say where it ran (and in
+  // which language) once the project no longer links that source.
+  const projectLinks = projectOut?.links;
   const record = useCallback((entry: Omit<TrailEntry, "at">) => {
     if (!project || entry.expr.trim() === "") return;
-    pushTrail(project, { ...entry, at: Date.now() });
+    const link = projectLinks?.find((l) => l.source_id === entry.sourceId && isQueryable(l.source_type));
+    const named = link && (link.source_type === "prometheus" || link.source_type === "loki")
+      ? { sourceName: link.source_name, sourceType: link.source_type }
+      : {};
+    pushTrail(project, { ...entry, ...named, at: Date.now() });
     setTrailVersion((n) => n + 1);
-  }, [project]);
-  // A run that answered, with its text left alone for two seconds, is worth keeping.
+  }, [project, projectLinks]);
+  // A run that answered with data, with its text left alone for two seconds, is worth keeping (an
+  // empty, refused or failed run isn't: half-typed text ends that way). A log query's run is its
+  // lines' (below).
+  const hasSeries = (state.data?.series.length ?? 0) > 0;
   useEffect(() => {
-    if (state.status !== "done" || state.expr !== expr || !source) return;
+    if (kind === "logs" || holding || state.status !== "done" || state.expr !== expr || !source || !hasSeries) return;
     const timer = setTimeout(() => record({ expr, sourceId: source.source_id }), TRAIL_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [state.status, state.runId, state.expr, expr, source, record]);
+  }, [kind, holding, state.status, state.runId, state.expr, expr, source, hasSeries, record]);
 
+  // What a pick from the trail did that the page doesn't show by itself (another source).
+  const [switched, setSwitched] = useState<string | null>(null);
   const pickTrail = (entry: TrailEntry) => {
-    record(entry);
     setExpr(entry.expr);
-    setSourceId(entry.sourceId);
-    // Another source has another list; the same one keeps its chips, now detached.
-    if (entry.sourceId !== source?.source_id) setBuilder(EMPTY_BUILDER);
-    else if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
-    runNow();
+    const here = entry.sourceId === source?.source_id;
+    const other = here ? undefined : queryable.find((l) => l.source_id === entry.sourceId);
+    setSwitched(other ? `Switched to ${other.source_name}.` : null);
+    if (here || other) {
+      record(entry);
+      // It comes with its own source, so it fits: never held.
+      languageHold.bring(entry.expr);
+      if (other) {
+        // Another source has another list.
+        setSourceId(other.source_id);
+        setBuilder(EMPTY_BUILDER);
+      } else {
+        followText(entry.expr);
+      }
+      runNow();
+      return;
+    }
+    // A source the project no longer links is never guessed at: the source shown stays, and a text
+    // that doesn't fit it is held like any other (nothing runs, nothing is kept).
+    followText(entry.expr);
+    const from = entry.sourceType ? languageOf(entry.sourceType) : textLanguage(entry.expr);
+    if (from !== null && from !== language) languageHold.hold(entry.expr, from);
+    else runNow();
   };
   const clearAll = () => {
     if (!project) return;
@@ -267,17 +315,28 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     () => {
       // Only an answer about exactly this text, project and source: never one being replaced.
       const fresh = state.status === "done" && state.expr === expr && state.projectId === project && state.sourceId === (source?.source_id ?? null);
-      return { panel: recPanel, data: fresh ? state.data : null, catalog, stepSeconds: fresh ? (state.step ?? 0) : 0 };
+      return { panel: recPanel, data: fresh ? state.data : null, catalog, stepSeconds: fresh ? (state.step ?? 0) : 0, invalid: state.shown === "invalid" };
     },
-    [recPanel, state.status, state.expr, state.projectId, state.sourceId, state.data, state.step, expr, project, source, catalog],
+    [recPanel, state.shown, state.status, state.expr, state.projectId, state.sourceId, state.data, state.step, expr, project, source, catalog],
   );
+  // A metric the text names that this source's catalog (read whole, `ok`) doesn't list: said beside the run.
+  const missingMetric = useMemo(() => {
+    if (!catalog || !source || source.source_type !== "prometheus" || catalog.ownerKind !== "project") return null;
+    if (catalog.sourceStates?.[source.source_id] !== "ok") return null;
+    // Only an empty answer to this very text, project and source: a run that found series proves nothing missing.
+    if (state.shown !== "done" || state.expr !== expr || state.data?.series.length !== 0) return null;
+    if (state.projectId !== project || state.sourceId !== source.source_id) return null;
+    const known = new Set(catalog.metrics.filter((m) => m.sourceId === null || m.sourceId === source.source_id).map((m) => m.name));
+    const name = metricNames(expr).find((n) => !known.has(n));
+    return name ? NO_SUCH_METRIC.replace("{name}", name).replace("{source}", source.source_name) : null;
+  }, [catalog, source, project, state.shown, state.expr, state.data, state.projectId, state.sourceId, expr]);
   const applyRec = (apply: (p: PanelSpec) => PanelSpec): string | void => {
     const next = apply(recPanel).queries[0]?.expr;
     if (next === undefined || next === expr) return;
-    // The hand-written text stays in the trail.
-    if (source) record({ expr, sourceId: source.source_id });
+    // The hand-written text stays in the trail, if it answered.
+    if (source && endedDone(expr)) record({ expr, sourceId: source.source_id });
     setExpr(next);
-    if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
+    followText(next);
     runNow();
   };
 
@@ -293,24 +352,41 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
       : []),
     [catalog, browseMode, source?.source_id],
   );
-  const applyBuilder = (action: BuilderAction) => {
+  /** `keyed`: a chip picked with the keyboard is an explicit run, kept on its answer like Ctrl+Enter. */
+  const applyBuilder = (action: BuilderAction, keyed = false) => {
     const next = builderReducer(builder, action);
     const text = builderQuery(next, metrics, streams);
     // A name the writers refuse leaves the text alone.
     if (text === null) return;
-    // Text the chips didn't write is kept in the trail before they replace it.
-    if (source && text !== expr && quickCheck(expr) === null && (builder.detached || !builderActive(builder))) {
+    // Text the chips didn't write is kept in the trail before they replace it, if it answered.
+    if (source && text !== expr && endedDone(expr) && (builder.detached || !builderActive(builder))) {
       record({ expr, sourceId: source.source_id });
     }
+    if (action.type === "pickMetric" || action.type === "pickStream") setPickSeq((n) => n + 1);
+    // A chip is a new query: what the last trail pick switched no longer describes it.
+    setSwitched(null);
     setBuilder(next);
-    // The same text again (a Split chip in logs) has nothing to run.
+    // The same text again has nothing to run.
     if (text === expr) return;
     setExpr(text);
+    if (keyed && source) {
+      const logs = source.source_type === "loki" && !isLogQlMetric(text);
+      explicit.current = { expr: text, sourceId: source.source_id, after: logs ? lines.runId : state.runId, logs };
+    }
     runNow();
   };
+  // The chips follow the text: a hand edit detaches them, and their own query typed again attaches them.
+  function followText(text: string) {
+    setBuilder((b) => {
+      if (!builderActive(b)) return b;
+      if (isAttached(b, text, metrics, streams)) return b.detached ? { ...b, detached: false } : b;
+      return builderReducer(b, { type: "typed" });
+    });
+  }
   const onType = (text: string) => {
     setExpr(text);
-    if (builderActive(builder)) setBuilder((b) => builderReducer(b, { type: "typed" }));
+    setSwitched(null);
+    followText(text);
   };
   const pickedMetric = builder.metric === null ? null : (metrics.find((m) => m.name === builder.metric) ?? null);
   const chipLabels = builder.stream ? streams.map((st) => st.name) : (pickedMetric?.labels.filter((l) => l !== "le" && l !== "quantile") ?? []);
@@ -320,9 +396,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     () => resolveTime(time, Math.floor(Date.now() / 1000)) ?? (resolveTime(DEFAULT_EXPLORE_TIME, Math.floor(Date.now() / 1000)) as { start: number; end: number }),
     [time.from, time.to, builder.metric, project, source?.source_id],
   );
-  const matchText = pickedMetric ? metricMatch(pickedMetric) : null;
-  const read = project && source && matchText !== null && !builder.stream
-    ? { projectId: project, sourceId: source.source_id, match: matchText, start: labelRange.start, end: labelRange.end }
+  const read = project && source && pickedMetric && !builder.stream
+    ? { projectId: project, sourceId: source.source_id, metric: pickedMetric, start: labelRange.start, end: labelRange.end }
     : null;
   const known = builder.stream ? Object.fromEntries(streams.map((st) => [st.name, st.values])) : null;
 
@@ -358,9 +433,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   // An emptied field (or one of only spaces) follows the chips again.
   const editLogs = (text: string) => setLogsText(text.trim() === "" ? null : text);
   const linesText = logsMode ? expr : fieldText;
-  const metricQuery = linesText.trim() !== "" && isLogQlMetric(linesText);
-  const linesQuery = metricQuery ? "" : linesText;
-  const selector = linesQuery.trim() === "" ? null : (logSelector(linesQuery) ?? linesQuery.trim());
+  const metricQuery = !holding && linesText.trim() !== "" && isLogQlMetric(linesText);
+  // A held text lists nothing either (P24).
+  const linesQuery = metricQuery || holding ? "" : linesText;
+  // A text that can't run never has its selector named: the section says only what is wrong with it.
+  const selector = linesQuery.trim() === "" || !runnable(linesQuery) ? null : (logSelector(linesQuery) ?? linesQuery.trim());
   // The lines' whole range stays put while only the metric text changes; a new lines text, place or
   // explicit run reads "now" again, so the lines always cover the time their label names.
   const linesRange = useMemo(
@@ -376,6 +453,47 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   });
   const linesCurrent = lines.key === linesFor
     && (lines.window === null ? chosen === null : chosen !== null && lines.window.start === chosen.start && lines.window.end === chosen.end);
+  // A log query's lines that answered, with the text left alone for two seconds, go into the trail.
+  const hasLines = lines.lines.length > 0;
+  useEffect(() => {
+    if (kind !== "logs" || !source || !linesCurrent || lines.status !== "done" || linesQuery !== expr || !hasLines) return;
+    const timer = setTimeout(() => record({ expr, sourceId: source.source_id }), TRAIL_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [kind, source, linesCurrent, lines.status, lines.runId, linesQuery, expr, hasLines, record]);
+
+  // Whether this text's last run on this page, project and source ended `done` (P24): only then is
+  // a text kept in the trail by a path that runs nothing itself.
+  function endedDone(text: string): boolean {
+    if (!source || !project || holding) return false;
+    if (kind === "logs") {
+      if (lines.shown !== "done" || lines.key === null) return false;
+      const [p, src, q] = JSON.parse(lines.key) as [string | null, string | null, string];
+      return p === project && src === source.source_id && q === text;
+    }
+    return state.shown === "done" && state.expr === text && state.projectId === project && state.sourceId === source.source_id;
+  }
+  // Ctrl+Enter: the run it starts is kept when it answers, empty or not; never at the press.
+  const explicit = useRef<{ expr: string; sourceId: string; after: number; logs: boolean } | null>(null);
+  useEffect(() => {
+    const want = explicit.current;
+    if (!want) return;
+    if (want.expr !== expr || want.sourceId !== source?.source_id || holding) { explicit.current = null; return; }
+    const ran = want.logs ? lines : state;
+    if (ran.runId <= want.after) return;
+    if (ran.status === "done") {
+      explicit.current = null;
+      record({ expr: want.expr, sourceId: want.sourceId });
+    } else if (ran.status === "invalid" || ran.status === "failed") {
+      explicit.current = null;
+    }
+  }, [state, lines, expr, source, holding, record]);
+  const runExplicitly = () => {
+    if (source && !holding && runnable(expr)) {
+      explicit.current = { expr, sourceId: source.source_id, after: kind === "logs" ? lines.runId : state.runId, logs: kind === "logs" };
+    }
+    runNow();
+    if (kind === "logs") retryLines();
+  };
   // No Loki in the project: no section and no ticks.
   const linesShown = projectOut !== null && linesSource !== null;
   const linesOn = linesShown && selector !== null;
@@ -397,7 +515,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
 
   // --- add to dashboard -------------------------------------------------------------------------
   // Only a text that reads as a query can be added. What the builder wrote names the panel.
-  const canAdd = source !== null && expr.trim() !== "" && quickCheck(expr) === null && !(state.shown === "invalid" && state.expr === expr);
+  // A log query is judged by its lines' run, any other by the main run.
+  const refusedNow = kind === "logs"
+    ? linesCurrent && lines.status === "invalid"
+    : state.shown === "invalid" && state.expr === expr;
+  const canAdd = source !== null && expr.trim() !== "" && runnable(expr) && !refusedNow && !holding;
   const builderWrote = builderActive(builder) && !builder.detached;
   const panelKind = kind;
   const defaultPanelTitle = (() => {
@@ -406,8 +528,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     return metric ? humanTitle(metric) : DEFAULT_PANEL_TITLE;
   })();
   openAdd.current = () => { if (canAdd && !addOpen) setAddOpen(true); };
-  // A new text is another question: what was said about the last add no longer fits.
-  useEffect(() => { setAdded(null); }, [expr]);
+  // A new text (or project) is another question: what was said about the last add no longer fits.
+  useEffect(() => { setAdded(null); }, [expr, project]);
 
   // --- what is drawn -------------------------------------------------------------------------
   const drawPanel = useMemo(
@@ -415,11 +537,22 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
     [state.panel, panelId, state.expr, expr, source, state.kind, kind],
   );
   const lastGoodPanel = state.lastGood?.panel ?? null;
+  // An empty metric answer: why, about the request whose answer is shown, once the check proves it.
+  // A log query says it under its lines instead.
+  const emptyShown = state.shown === "done" && state.data?.state === "empty" && state.kind === "metrics";
+  const emptyType = state.panel?.queries[0]?.source.type;
+  const emptyReason = useEmptyReason(emptyShown && state.request && (emptyType === "prometheus" || emptyType === "loki")
+    ? { sourceType: emptyType, request: state.request, range: state.range ?? undefined }
+    : null);
   let result: ReactNode = null;
-  if (state.shown === "done" && state.data && state.range) {
+  if (kind === "logs") {
+    // A log query: no chart, no last good result. The Log lines section is the whole answer.
+  } else if (state.shown === "done" && state.data && state.range) {
     const empty = state.data.state === "empty";
     result = empty ? (
-      <p className={s.note}>{PANEL_COPY.empty}</p>
+      emptyReason
+        ? <p className={`${s.note} ${s.reason}`} data-empty-reason="">{emptyReason}</p>
+        : <p className={s.note}>{PANEL_COPY.empty}</p>
     ) : (
       <>
         {state.data.state === "partial" && state.data.problems[0] && <p className={s.partial}>{state.data.problems[0]}</p>}
@@ -462,7 +595,17 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const noSources = projectOut !== null && queryable.length === 0;
   const working = projectOut !== null && !noSources;
   const shown = trail.slice(-TRAIL_SHOWN);
-  const current = source ? trailKey({ expr, sourceId: source.source_id }) : "";
+  // The chip for the query in the field, when it ran on the source shown (one chip per text).
+  const fieldKey = trailKey({ expr });
+  const current = source && shown.some((e) => e.sourceId === source.source_id && trailKey(e) === fieldKey) ? fieldKey : "";
+  const sourceNames = Object.fromEntries(queryable.map((l) => [l.source_id, l.source_name]));
+  const heldNote = holding && held && source
+    ? heldWords(held, source.source_name, language)
+    : null;
+  const clearHeld = () => {
+    onType("");
+    queryField.current?.focus();
+  };
 
   return (
     <section
@@ -479,14 +622,23 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
             <label className={s.field}>
               <span className={s.fieldLabel}>Project</span>
               <select className={s.select} value={project ?? ""}
-                onChange={(e) => { setProjectId(e.target.value); setSourceId(undefined); setBuilder(EMPTY_BUILDER); setLogsText(null); }}>
+                onChange={(e) => {
+                  // The same source if the new project links it, else one of the same kind (C1).
+                  setProjectId(e.target.value);
+                  setSourceId(source?.source_id);
+                  setKeepType(source?.source_type);
+                  setBuilder(EMPTY_BUILDER);
+                  setLogsText(null);
+                  setAdded(null);
+                  setSwitched(null);
+                }}>
                 {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             </label>
             {working && projectOut && (
               <label className={s.field}>
                 <span className={s.fieldLabel}>Source</span>
-                <select className={s.select} value={source?.source_id ?? ""} onChange={(e) => { setSourceId(e.target.value); setBuilder(EMPTY_BUILDER); }}>
+                <select className={s.select} value={source?.source_id ?? ""} onChange={(e) => { setSourceId(e.target.value); setBuilder(EMPTY_BUILDER); setSwitched(null); }}>
                   {queryable.map((l) => (
                     <option key={l.source_id} value={l.source_id}>{`${l.source_name} · ${SOURCE_WORDS[l.source_type]}`}</option>
                   ))}
@@ -505,28 +657,31 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
                 Add to dashboard
               </button>
             )}
-            {working && (
-              <span className={s.addStatus} role="status">
-                {added && (
-                  // Keyed by the add, so each new message settles in; the empty region never does.
-                  <span key={addSeq} className={s.addMessage}>
-                    <span>{`Added to "${added.title}".`}</span>
-                    <button type="button" className={s.addOpen} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
-                  </span>
-                )}
-              </span>
-            )}
           </div>
         )}
       </header>
+      {working && (
+        // A row of its own under the header, always there: the note never makes the header reflow.
+        <div className={s.addRow} data-explore-added="">
+          <span className={s.addStatus} role="status">
+            {added && (
+              // Keyed by the add, so each new message settles in; the empty region never does.
+              <span key={addSeq} className={s.addMessage}>
+                <span className={s.addTitle} title={`Added to "${added.title}".`}>{`Added to "${added.title}".`}</span>
+                <button type="button" className={s.addOpen} onClick={() => openInNewTab({ page: "dashboard", id: added.id })}>Open dashboard</button>
+              </span>
+            )}
+          </span>
+        </div>
+      )}
 
       {addOpen && projectOut && source && (
         <AddToDashboard project={projectOut} source={source} expr={expr} kind={panelKind} defaultTitle={defaultPanelTitle}
           unit={builderWrote && pickedMetric ? guessUnit(pickedMetric) : "none"} restoreFocusTo={addButton}
           onCancel={() => setAddOpen(false)}
           onAdded={(done) => {
-            // The query that was added is worth keeping in the trail.
-            record({ expr, sourceId: source.source_id });
+            // The query that was added is worth keeping in the trail, if it answered here.
+            if (endedDone(expr)) record({ expr, sourceId: source.source_id });
             setAdded(done);
             setAddSeq((n) => n + 1);
             setAddOpen(false);
@@ -565,10 +720,14 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
           )}
           {(!narrow || browseOpen) && (
             <aside id="explore-browse" className={s.browse}>
-              <BrowseList ref={listBox} mode={browseMode} projectName={projectName} metrics={metrics} streams={streams}
-                selectedMetric={builder.metric} selectedStreams={builder.stream ? builder.only : {}}
+              {/* A hand-edited query isn't the list's pick: nothing shows as chosen. */}
+              <BrowseList ref={listBox} mode={browseMode} sourceId={source?.source_id ?? ""} sourceName={source?.source_name ?? ""}
+                metrics={metrics} streams={streams}
+                selectedMetric={builder.detached ? null : builder.metric} selectedStreams={builder.stream && !builder.detached ? builder.only : {}}
                 loading={catalogLoading && catalog === null} error={catalogError}
-                notes={catalog ? [...catalog.problems, ...catalog.notes] : []} builtAt={catalog?.builtAt ?? null}
+                problems={catalog?.problems ?? []}
+                notes={catalog ? (browseMode === "streams" ? catalog.notesBy.loki : catalog.notesBy.prometheus) : []}
+                streamWindowSeconds={catalog?.streamWindowSeconds ?? null} builtAt={catalog?.builtAt ?? null}
                 refreshing={refreshing} refreshError={refreshError} onRefresh={refreshList}
                 onPickMetric={(metric) => applyBuilder({ type: "pickMetric", metric })}
                 onPickStream={(label, value) => applyBuilder({ type: "pickStream", label, value })} />
@@ -576,31 +735,31 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
           )}
           <div className={s.work}>
           <div className={s.card}>
-            <QueryBar ref={queryField} expr={expr} language={language} onChange={onType}
-              onRun={() => {
-                // Only a text that reads as a query is worth keeping.
-                if (source && quickCheck(expr) === null) record({ expr, sourceId: source.source_id });
-                runNow();
-              }}
-              onLeave={leaveQuery} />
+            <QueryBar ref={queryField} expr={expr} language={language} onChange={onType} onRun={runExplicitly} onLeave={leaveQuery} />
             {chipsShown && (
-              <LabelChips builder={builder} labels={chipLabels} loki={lokiLabels} known={known} read={read}
-                onSplit={(label) => applyBuilder({ type: "split", label })}
-                onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
+              <LabelChips key={pickSeq} builder={builder} labels={chipLabels} loki={lokiLabels} known={known} read={read}
+                onSplit={(label, keyed) => applyBuilder({ type: "split", label }, keyed)}
+                onOnly={(label, value, keyed) => applyBuilder({ type: "only", label, value }, keyed)} />
             )}
-            <MetaLine state={state} expr={expr} kind={kind} />
+            <MetaLine state={state} expr={expr} kind={kind} language={language} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
+            {/* The live region is always there (empty while nothing is held), so the note is read when it comes. */}
+            <div className={heldNote ? s.held : undefined} data-explore-held="">
+              <p className={s.heldText} role="status">{heldNote ?? ""}</p>
+              {heldNote && <button type="button" className={s.retry} onClick={clearHeld}>Clear the query</button>}
+            </div>
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>
             {linesShown && linesSource && (
               <LinkedLogs ref={linesBox} headingRef={linesHeading} showAllRef={showAll}
                 mode={logsMode ? "logs" : "metrics"} sourceName={linesSource.source_name}
-                field={logsMode ? undefined : { value: fieldText, onChange: editLogs }}
+                field={logsMode ? undefined : { value: fieldText, onChange: editLogs }} chips={chipsShown}
                 selector={selector} metricQuery={metricQuery} state={lines} current={linesCurrent}
                 window={chosen} range={linesRange} onShowAll={showAllLines} onRetry={retryLines} />
             )}
           </div>
-          <Trail entries={shown} currentKey={current} onPick={pickTrail} onClear={clearAll} />
+          <Trail entries={shown} currentKey={current} sourceId={source?.source_id ?? null} sourceNames={sourceNames} note={switched}
+            onPick={pickTrail} onClear={clearAll} />
           </div>
         </div>
       )}

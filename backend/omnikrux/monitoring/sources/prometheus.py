@@ -28,7 +28,7 @@ from omnikrux.monitoring.sources.connector import (
     gather_all,
     json_object,
     number_text,
-    status_message,
+    probe_failure,
 )
 from omnikrux.monitoring.sources.prometheus_operator import (
     GROUP,
@@ -41,6 +41,9 @@ from omnikrux.monitoring.sources.types import SourceConfig
 
 PROBE_SECONDS = 10.0
 QUERY_SECONDS = 30.0
+# Prometheus's default lookback (`--query.lookback-delta`): a range query with a longer step looks
+# back over its whole step instead.
+LOOKBACK_SECONDS = 300.0
 WHAT = "a Prometheus-compatible server"
 ALL_SERIES = '{__name__=~".+"}'
 FAMILY_TYPES = ("histogram", "gaugehistogram", "summary")
@@ -74,7 +77,7 @@ class PrometheusConnector:
             if isinstance(info, dict) and isinstance(info.get("version"), str):
                 version = info["version"]
         if got.status != 200:
-            return TestResult(False, None, status_message(name, got.status))
+            return probe_failure(name, got.status, "a Prometheus")
         data = json_object(got.body)
         if data is None or data.get("status") != "success":
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
@@ -91,6 +94,11 @@ class PrometheusConnector:
             for key, value in (("start", q.start), ("end", q.end), ("step", q.step)):
                 if value is not None:
                     params.append((key, number_text(value)))
+            if q.step is not None and q.step > LOOKBACK_SECONDS:
+                # A point reads the newest sample at most the lookback before it: with steps
+                # longer than the default 5 minutes, a gauge would show only what was written in
+                # the last 5 minutes of each step (on a year's range, 5 minutes a day).
+                params.append(("lookback_delta", number_text(q.step)))
         got = await t.request("GET", path, params=params, timeout=QUERY_SECONDS)
         body = checked_json(got, name, WHAT)
         data = body.get("data")

@@ -197,8 +197,11 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
   useEffect(() => {
     if (filled.current || projects.data === undefined || (groups.data === undefined && !groups.isError)) return;
     filled.current = true;
+    // A new rule is for the owner asked for (where new dashboards go), else the first project by name.
+    const firstByName = [...projectList].sort((a, b) => a.name.localeCompare(b.name))[0];
     const owner = initial ? { kind: initial.scope.kind, id: initial.scope.id }
-      : scope && owners.some((o) => ownerKey(o.owner) === ownerKey(scope)) ? scope : owners[0]?.owner ?? null;
+      : scope && owners.some((o) => ownerKey(o.owner) === ownerKey(scope)) ? scope
+      : firstByName ? { kind: "project" as const, id: firstByName.id } : owners[0]?.owner ?? null;
     // Only who it is for and the source are filled in: anything typed meanwhile stays a change.
     const fill = { owner, source: initial ? initialSource(initial) : defaultSource(owner, projectList) };
     setDraft((d) => ({ ...d, ...fill }));
@@ -233,13 +236,15 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
   const staleRef = useRef<HTMLButtonElement>(null);
   const saveRef = useRef<HTMLButtonElement>(null);
 
-  // The form opens with the keyboard on Name: at once, and again once the effects of what it replaced
-  // have run (a dialog closing as it opens gives the keyboard back to where it was asked from).
-  useLayoutEffect(() => { nameRef.current?.focus({ preventScroll: true }); }, []);
+  // The form opens with the keyboard on its first field (For), new or edited: at once, and again
+  // once the effects of what it replaced have run (a dialog closing as it opens gives the keyboard
+  // back to where it was asked from).
+  const firstRef = ownerRef;
+  useLayoutEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, [firstRef]);
   useEffect(() => {
     const el = document.activeElement;
-    if (el === null || el === document.body || !el.isConnected || !el.closest("[data-rule-form]")) nameRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (el === null || el === document.body || !el.isConnected || !el.closest("[data-rule-form]")) firstRef.current?.focus({ preventScroll: true });
+  }, [firstRef]);
   useLayoutEffect(() => {
     if (focusField === null) return;
     const target = {
@@ -403,6 +408,7 @@ const RuleFormBody = forwardRef<RuleFormHandle, BodyProps>(function RuleFormBody
         <div className={s.field}>
           <label htmlFor={`${id}-source`} className={s.label}>Source</label>
           <select ref={sourceRef} id={`${id}-source`} className={s.input} value={sourceKey(source)}
+            title={choices.find((c) => sourceKey(c.pick) === sourceKey(source))?.label}
             aria-invalid={err("source") ? true : undefined} aria-describedby={err("source") ? `${id}-source-e` : undefined}
             onChange={(e) => pickSource(e.target.value)}>
             {source === null && <option value="">{owner ? "No source to read" : "…"}</option>}

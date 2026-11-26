@@ -152,6 +152,72 @@
   margin: 0;
 }
 
+/* Said once above the list (an alert asked about that stopped firing): plain words, no alarm. */
+.notice {
+  margin: 0;
+  padding: 7px 10px 7px 12px;
+  border-left: 2px solid var(--rule);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* The silences that ended, folded under one quiet line: they mute nothing any more. */
+.fold {
+  margin: 0;
+}
+
+.foldTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 4px 6px 4px 2px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.foldTitle::-webkit-details-marker {
+  display: none;
+}
+
+.foldTitle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.fold[open] > .foldTitle::before {
+  transform: rotate(45deg);
+}
+
+.fold[open] > .foldTitle {
+  margin-bottom: 6px;
+}
+
+.foldTitle:hover {
+  color: var(--ink-2);
+}
+
+.foldTitle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.rowError {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--bad);
+  font-size: 12px;
+}
+
 /* --- the form ---------------------------------------------------------------------------------- */
 
 .form {

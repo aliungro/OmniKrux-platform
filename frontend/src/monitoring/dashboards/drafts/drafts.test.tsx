@@ -284,14 +284,15 @@ describe("Drafts across tabs, windows and saves", () => {
     expect(await screen.findByRole("region", { name: "Unsaved draft" })).toBeTruthy();
   });
 
-  it("Edit starts from a stored draft; after Discard draft it starts afresh", async () => {
+  it("Edit starts from a stored draft once Restore draft is pressed; after Discard draft it starts afresh", async () => {
     shop();
     const savedAt = new Date(2026, 2, 3, 9, 5).getTime();
     foreign({ savedAt });
     const user = userEvent.setup();
     await opened();
-    expect(screen.getByRole("region", { name: "Unsaved draft" })).toBeTruthy();
-    await user.keyboard("e");
+    const banner = screen.getByRole("region", { name: "Unsaved draft" });
+    expect(within(banner).getByRole("button", { name: "Restore draft" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Restore draft" }));
     expect(await screen.findByText("Editing")).toBeTruthy();
     expect(tile("Requests per second")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Unsaved draft" })).toBeNull();
@@ -307,6 +308,31 @@ describe("Drafts across tabs, windows and saves", () => {
     expect(await screen.findByText("Editing")).toBeTruthy();
     expect(tile("Requests")).toBeTruthy();
     expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("Edit while a draft is offered asks for a choice", async () => {
+    shop();
+    foreign({ savedAt: new Date(2026, 2, 3, 9, 5).getTime() });
+    const user = userEvent.setup();
+    await opened();
+    const banner = screen.getByRole("region", { name: "Unsaved draft" });
+    expect(within(banner).queryByText("Restore the draft or discard it before editing.")).toBeNull();
+    // Edit by key, then by the button: the keyboard goes to Restore draft, and nothing else happens.
+    for (const press of [() => user.keyboard("e"), () => user.click(screen.getByRole("button", { name: "Edit" }))]) {
+      await press();
+      expect(within(banner).getByText("Restore the draft or discard it before editing.")).toBeTruthy();
+      expect(document.activeElement).toBe(within(banner).getByRole("button", { name: "Restore draft" }));
+      expect(screen.queryByText("Editing")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save dashboard" })).toBeNull();
+      expect(stored()?.writer).toBe("w-other");
+      notBody();
+    }
+    // Discard draft clears the banner and its note; Edit then starts afresh.
+    await user.click(within(banner).getByRole("button", { name: "Discard draft" }));
+    expect(screen.queryByText("Restore the draft or discard it before editing.")).toBeNull();
+    await user.keyboard("e");
+    expect(await screen.findByText("Editing")).toBeTruthy();
+    expect(tile("Requests")).toBeTruthy();
   });
 
   it("another window removing or replacing the draft: the newest changes stay stored", async () => {

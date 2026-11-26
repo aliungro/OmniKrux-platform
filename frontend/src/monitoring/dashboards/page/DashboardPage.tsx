@@ -2,16 +2,20 @@
 // (the document, edited live) and, for a saved dashboard, the Versions tab. Edit turns the grid
 // into tiles and the header into Discard and Save dashboard (edit mode, kept per workspace tab).
 // Time, variables, auto-refresh and the view tab live in the tab's view (replace navigations).
-// "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft.
+// "+ Add panel" (and `a`) open Add panel's search; what it adds goes into the edit draft. The
+// suggestions column and Add panel share one suggestion source, read only while either is open.
 // A link to a panel (`panel`) scrolls to it and flashes it; `editAlert` opens edit mode on that
 // panel's Alert tab. A panel's alert badge and its Alert tab open the rule on the Alerts page.
+// In edit mode the title is a field (Rename… opens edit mode there) and the workspace tab follows
+// it; Undo and Ctrl+Z (outside text fields) step back through the session's changes.
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { failure } from "../../../api/http";
 import { isEditable, pressed } from "../../../features/chrome/shortcuts";
 import { AddPanelSearch } from "../../build/AddPanelSearch";
 import { useFlyIn } from "../../build/flyIn";
-import { RailLayout, SuggestionsRail } from "../../build/SuggestionsRail";
+import { RailLayout, SuggestionsRail, type RailFocusRequest } from "../../build/SuggestionsRail";
+import { useSuggestions } from "../../build/useSuggestions";
 import { useToolReviews } from "../../alerts/reviews/useToolReviews";
 import { focusMainFrom } from "../../focus";
 import type { MonitoringPageProps } from "../../MonitoringApp";
@@ -23,13 +27,14 @@ import { CopyDashboardDialog } from "../create/CopyDashboardDialog";
 import { DeleteDashboardDialog } from "../create/DeleteDashboardDialog";
 import type { VarValue } from "../interpolate";
 import type { NewPanel } from "../layout";
-import type { RefreshSpec, TimeSpec } from "../schema";
+import type { DashboardSpec, RefreshSpec, TimeSpec, VariableSpec } from "../schema";
+import { VariablesDialog } from "../editor/VariablesDialog";
 import { DashboardGrid, type GridControls } from "../grid/DashboardGrid";
 import { usePrefersReducedMotion } from "../motion";
-import { DiscardDialog, EditControls, EditingPill, EditNotice } from "../editor/EditBar";
-import { hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
+import { DiscardDialog, EditControls, EditingPill, EditNotice, RemovedNote } from "../editor/EditBar";
+import { canUndo, changedPanelIds, hasUnsavedWork, isDraftEdit, JSON_FIRST, type EditorAction, type EditorState } from "../editor/editorState";
 import { SaveConflict } from "../editor/SaveConflict";
-import { editSessions, useDashboardEditor } from "../editor/useDashboardEditor";
+import { editSessions, JSON_SAVE_REFUSED, useDashboardEditor } from "../editor/useDashboardEditor";
 import { DraftBanner, DraftsOffNotice, EditedElsewhere } from "../drafts/DraftBanner";
 import { forgetSession, useDraftOffer } from "../drafts/useDraft";
 import { readDraft, removeDraft, type StoredDraft } from "../drafts/draftStore";
@@ -64,9 +69,10 @@ function UpdatedLine({ status }: { status: PanelStatusStore }) {
 function ReadyNote({ dashboard }: { dashboard: DashboardOut }) {
   const ready = useReadyMade(dashboard.owner_id);
   const notes = ready.data?.find((r) => r.id === dashboard.id)?.notes ?? [];
+  const tool = dashboard.id.endsWith(":logs") ? "Loki" : "Prometheus";
   return (
     <div className={s.readyNote}>
-      <p className={s.readyLine}>Ready-made views are generated from what {dashboard.owner_name}'s Prometheus has. Copy one to change it.</p>
+      <p className={s.readyLine}>Ready-made views are generated from what {dashboard.owner_name}'s {tool} has. Copy one to change it.</p>
       {notes.map((n) => <p key={n} className={s.readyLine}>{n}</p>)}
     </div>
   );
@@ -95,7 +101,14 @@ function RereadNotice({ failed, buttonRef }: { failed: RereadFailure; buttonRef:
   );
 }
 
-function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab }: MonitoringPageProps & {
+/** Under the title field when it can't stay as typed. */
+const TITLE_BLANK ="Give the dashboard a title.";
+/** How long the note about a removed panel stays (the next edit takes it away sooner). */
+const REMOVED_NOTE_MS = 10_000;
+/** How long "Saved …" stays. */
+const SAVED_NOTE_MS = 4000;
+
+function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, activateTab, setTabTitle }: MonitoringPageProps & {
   view: DashboardViewState;
   dashboard: DashboardOut;
   reread: RereadFailure | null;
@@ -119,6 +132,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const titleId = `${base}-title`;
   const tabIds = useCallback((t: DashboardTab) => ({ tab: `${base}-tab-${t}`, panel: `${base}-panel-${t}` }), [base]);
   const title = useRef<HTMLHeadingElement>(null);
+  const titleInput = useRef<HTMLInputElement>(null);
   const tabRefs = useRef<Partial<Record<DashboardTab, HTMLButtonElement | null>>>({});
   const timeButton = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
@@ -126,6 +140,8 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const discardButton = useRef<HTMLButtonElement>(null);
   const page = useRef<HTMLElement>(null);
   const [timeOpen, setTimeOpen] = useState(false);
+  const variablesButton = useRef<HTMLButtonElement>(null);
+  const [askVariables, setAskVariables] = useState(false);
   /** Asking before Discard drops changes; the keyboard goes back to the Discard it came from. */
   const [askDiscard, setAskDiscard] = useState<RefObject<HTMLButtonElement | null> | null>(null);
   /** The JSON tab's typing that hasn't paused yet: Save and Discard apply it first. */
@@ -163,6 +179,18 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   };
   useLayoutEffect(() => { if (elsewhere) goElsewhere.current?.focus(); }, [elsewhere]);
   const restoreDraft = () => startEditing(offer.draft);
+  // Edit while a draft is offered changes nothing but asks for a choice: the keyboard goes to
+  // Restore draft, and the banner says so (Restore draft or Discard draft come first).
+  const restoreButton = useRef<HTMLButtonElement>(null);
+  const [askedDraft, setAskedDraft] = useState(false);
+  const draftOffered = offer.draft !== null;
+  useEffect(() => { if (!draftOffered) setAskedDraft(false); }, [draftOffered]);
+  const askForDraft = (): boolean => {
+    if (!draftOffered || editor.state.mode === "edit") return false;
+    setAskedDraft(true);
+    restoreButton.current?.focus();
+    return true;
+  };
   // Asked again on the press: a tab that is gone or stopped editing leaves editing to this one.
   const goToEditingTab = () => {
     const other = editingTab();
@@ -182,11 +210,14 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const [arrival] = useState(() => peekArrival(dashboard.id));
   const [arrivedWords, setArrivedWords] = useState("");
   const toAddTile = useRef(false);
+  /** A copy of a ready-made view: the page opens at its top with the heading focused, so its note is in view. */
+  const toTop = useRef(false);
   useEffect(() => {
     if (!arrival) return;
     forgetArrival(dashboard.id);
     if (arrival.edit && !ready && editor.state.mode === "view" && startEditing(null)) {
-      toAddTile.current = true;
+      if (arrival.status !== undefined) toTop.current = true;
+      else toAddTile.current = true;
       setArrivedWords(arrival.status ?? "");
     } else {
       title.current?.focus({ preventScroll: true });
@@ -202,6 +233,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     nav.navigate((v) => (v.page === "dashboard" && v.id === view.id ? { ...v, vars: { ...v.vars, [name]: value } } : v), "replace");
   }, [nav, view.id]);
   const selectTab = useCallback((t: DashboardTab) => {
+    setRailFocus(null); // a pending ask for the column's cards must not outlive the tab it was made on
     replace({ tab: t });
     tabRefs.current[t]?.focus();
   }, [replace]);
@@ -221,7 +253,16 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   // Copy to edit (a ready-made view): copied into its project as it is, then opened in edit mode.
   const opener = { tabId, nav, openInNewTab };
   const copyToEdit = useCopyToEdit(opener);
-  const edit = ready ? () => copyToEdit.copy(dashboard.id, dashboard.owner_id) : () => { startEditing(null); };
+  // The copy starts at the variable values chosen here ("all", or the values; nothing chosen is left to its default).
+  const selections = () => {
+    const chosen: Record<string, "all" | string[]> = {};
+    for (const v of ctx.variables) {
+      if (v.selected === "all") chosen[v.spec.name] = "all";
+      else if (v.selected.length > 0) chosen[v.spec.name] = [...v.selected];
+    }
+    return chosen;
+  };
+  const edit = ready ? () => copyToEdit.copy(dashboard.id, dashboard.owner_id, selections()) : () => { if (!askForDraft()) startEditing(null); };
   const save = () => {
     flushJson.current?.();
     return editor.save();
@@ -248,10 +289,38 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const [added, setAdded] = useState<{ kind: "panel"; id: string; title: string } | { kind: "empty" } | null>(null);
   const { launch, tileRef } = useFlyIn();
   const openSearch = useCallback((opener: HTMLElement | null) => {
-    searchOpener.current = opener;
+    // The suggestions column hides while the search is open, so a card can't take the keyboard back.
+    const inRail = opener?.closest("[data-suggestions-rail]") ?? null;
+    searchOpener.current = inRail ? page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current : opener;
     setRefused(null);
+    setRailFocus(null); // the column unmounts: an ask still waiting for its cards would fire after Esc
     setSearching(true);
   }, []);
+
+  // One suggestion source for the column and Add panel: read and previewed only while editing with
+  // either open (never for a dashboard that is only viewed).
+  const railOpen = editing !== null && editing.suggestions === "open";
+  const railShown = railOpen && tab === "dashboard" && !ctx.ownerFailure && !searching;
+  const suggestions = useSuggestions({
+    owner: editing !== null && (railShown || searching) ? ctx.owner : null,
+    ownerName: ctx.ownerName || dashboard.owner_name, vars: ctx.vars, range: ctx.range,
+  });
+  // The Suggestions button and `s` show the column and send the keyboard to its first unused card.
+  const suggestionsButton = useRef<HTMLButtonElement>(null);
+  const [railFocus, setRailFocus] = useState<RailFocusRequest | null>(null);
+  // Whatever takes the column away (tab, owner failure, Add panel, Hide) drops an ask for its cards.
+  useEffect(() => { if (!railShown) setRailFocus(null); }, [railShown]);
+  const railAsks = useRef(0);
+  const showSuggestions = (from: Element | null) => {
+    if (editor.state.mode !== "edit") return;
+    if (editor.state.suggestions !== "open") editor.dispatch({ type: "suggestions", open: true });
+    // Off the Dashboard tab the column opens there, without taking the keyboard later.
+    if (tab === "dashboard" && !ctx.ownerFailure) setRailFocus({ seq: (railAsks.current += 1), from });
+  };
+  const toggleSuggestions = () => {
+    if (railShown) editor.dispatch({ type: "suggestions", open: false });
+    else showSuggestions(suggestionsButton.current);
+  };
   /** While the JSON text doesn't apply, nothing is added (it would drop that text): the search stays open and says why. */
   const jsonBlocks = (action: EditorAction) => {
     const st = editor.state;
@@ -290,8 +359,96 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (tile) tileRef(flying)(tile);
   }, [flying, tileRef]);
   const toAddPanel = () => (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
+
+  // The title field: each change is a draft edit (one undo step while typing), refused while the
+  // JSON text doesn't apply; a blank title is said under it (and refused by Save, like any problem).
+  const [titleRefused, setTitleRefused] = useState(false);
+  const retitle = (text: string) => {
+    const action: EditorAction = { type: "setDashboard", key: "title", update: (d) => ({ ...d, title: text }) };
+    setTitleRefused(jsonBlocks(action));
+    editor.dispatch(action);
+  };
+  // Opening applies any JSON typing first, so the dialog starts from the draft as it really is.
+  const openVariables = () => {
+    flushJson.current?.();
+    setAskVariables(true);
+  };
+  // The dialog never outlives the edit session (it would reopen on the next edit).
+  const sessionOn = editing !== null;
+  useEffect(() => { if (!sessionOn) setAskVariables(false); }, [sessionOn]);
+  // The variables dialog: Apply is one edit (one undo step), refused while the JSON text doesn't apply.
+  const applyVariables = (variables: VariableSpec[]): string | null => {
+    const st = flushJson.current?.() ?? editor.state;
+    if (st.mode === "edit" && st.jsonText !== null) return JSON_FIRST;
+    editor.dispatch({ type: "setDashboard", update: (d) => ({ ...d, variables }) });
+    setAskVariables(false);
+    return null;
+  };
+  /** Undo was refused while the JSON text doesn't apply: said on screen until the JSON applies again. */
+  const [undoRefused, setUndoRefused] = useState(false);
+  // Once the JSON applies again (or editing ends) a refusal is over: a later broken text doesn't bring it back.
+  const jsonPending = editing !== null && editing.jsonText !== null;
+  useEffect(() => {
+    if (jsonPending) return;
+    setTitleRefused(false);
+    setUndoRefused(false);
+  }, [jsonPending]);
+  const titleProblem = !editing ? null
+    : titleRefused && jsonPending ? JSON_FIRST
+    : editing.draft.title.trim() === "" ? TITLE_BLANK : null;
+  // The workspace tab shows the title being edited; the saved one again once editing ends.
+  const draftTitle = editing ? editing.draft.title : null;
+  useEffect(() => { setTabTitle?.(tabId, draftTitle); }, [setTabTitle, tabId, draftTitle]);
+  useEffect(() => () => setTabTitle?.(tabId, null), [setTabTitle, tabId]);
+
+  // Undo (the button, Ctrl+Z): what it did is said; the keyboard stays, or, when what held it went
+  // away (an undone add, the note's Undo), goes to a panel that came back, else the first tile.
+  const [said, setSaid] = useState({ text: "", seq: 0 });
+  const say = (text: string) => setSaid((was) => ({ text, seq: was.seq + 1 }));
+  const [undone, setUndone] = useState<{ ids: string[]; seq: number } | null>(null);
+  const undo = () => {
+    const st = flushJson.current?.() ?? editor.state;
+    if (st.mode !== "edit") return;
+    if (st.jsonText !== null) {
+      setUndoRefused(true);
+      return say(JSON_FIRST);
+    }
+    if (!canUndo(st)) return say("Nothing to undo.");
+    const next = editor.dispatch({ type: "undo" });
+    if (next.mode !== "edit") return;
+    say("Undid the last change.");
+    setUndone((was) => ({ ids: changedPanelIds(st.draft, next.draft), seq: (was?.seq ?? 0) + 1 }));
+  };
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  /** The keyboard was left nowhere: on a panel of `ids`, else the first tile, the Add tile or Save dashboard. */
+  const toGrid = useCallback((ids: readonly string[] = []) => {
+    if (!focusLost()) return;
+    for (const id of ids) if (grid.current?.focusPanel(id)) return;
+    (page.current?.querySelector<HTMLElement>("[data-tile-id], [data-add-tile]") ?? saveButton.current ?? title.current)?.focus({ preventScroll: true });
+  }, []);
+  useLayoutEffect(() => { if (undone) toGrid(undone.ids); }, [undone, toGrid]);
+
+  // A removed panel: said under the header with Undo, until the next edit or 10 s.
+  const [removed, setRemoved] = useState<{ title: string; draft: DashboardSpec } | null>(null);
+  const onRemoved = (removedTitle: string, draft: DashboardSpec) => setRemoved({ title: removedTitle, draft });
+  const removedShown = editing !== null && removed !== null && editing.draft === removed.draft;
+  useEffect(() => { if (removed && !removedShown) setRemoved(null); }, [removed, removedShown]);
+  useEffect(() => {
+    if (!removed) return;
+    const timer = setTimeout(() => setRemoved(null), REMOVED_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [removed]);
+  const noteWasShown = useRef(false);
+  const inEdit = editing !== null;
+  useLayoutEffect(() => {
+    // Leaving edit mode puts the keyboard on Edit itself (below).
+    if (noteWasShown.current && !removedShown && inEdit) toGrid();
+    noteWasShown.current = removedShown;
+  }, [removedShown, inEdit, toGrid]);
+  // Hide suggestions: the keyboard goes to the Suggestions button that brings them back.
   const hideSuggestions = () => {
-    toAddPanel();
+    (suggestionsButton.current ?? saveButton.current)?.focus();
     editor.dispatch({ type: "suggestions", open: false });
   };
   const emptyFromSearch = () => {
@@ -324,6 +481,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     if (wasEditing.current && !isEditing) {
       setAskDiscard(null);
       setSearching(false);
+      setRailFocus(null);
       editButton.current?.focus();
     } else if (!wasEditing.current && isEditing && focusLost()) {
       saveButton.current?.focus();
@@ -331,10 +489,27 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     wasEditing.current = isEditing;
   }, [isEditing]);
   useLayoutEffect(() => {
-    if (!isEditing || !toAddTile.current) return;
+    if (!isEditing) return;
+    if (toTop.current) {
+      toTop.current = false;
+      page.current?.scrollIntoView?.({ block: "start" });
+      title.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (!toAddTile.current) return;
     toAddTile.current = false;
     (page.current?.querySelector<HTMLElement>("[data-add-tile]") ?? saveButton.current)?.focus();
   }, [isEditing]);
+
+  // A save says so for a few seconds.
+  const [saved, setSaved] = useState<string | null>(null);
+  const lastSaved = editor.lastSaved;
+  useEffect(() => {
+    if (lastSaved === null) return;
+    setSaved(lastSaved.title);
+    const timer = setTimeout(() => setSaved(null), SAVED_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [lastSaved]);
 
   // The conflict review closed because the draft itself was refused (422): the keyboard goes to
   // Show in JSON, or Save dashboard.
@@ -364,6 +539,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         e.preventDefault();
         editButton.current?.focus();
         edit?.();
+      } else if (pressed("suggestionsFocus", e) && editing && tab === "dashboard" && !ctx.ownerFailure && !isEditable(e.target)) {
+        e.preventDefault();
+        showSuggestions(document.activeElement);
       }
     };
     document.addEventListener("keydown", onKey);
@@ -388,14 +566,43 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
     return () => document.removeEventListener("keydown", onSave, true);
   }, [isEditing]);
 
+  // Ctrl+Z (Cmd+Z) while editing undoes, with the keyboard on this page outside any text field: a
+  // field (the title, a query, the JSON editor) keeps its own undo. Ctrl+Shift+Z is left alone.
+  useEffect(() => {
+    if (!isEditing) return;
+    const onUndo = (e: KeyboardEvent) => {
+      // A held key undoes once: with no redo, a repeat would run back through the whole session.
+      if (!pressed("dashboardUndo", e) || e.shiftKey || e.defaultPrevented || e.repeat) return;
+      const t = e.target;
+      if (!(t instanceof Node) || !page.current?.contains(t) || isEditable(t)) return;
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      e.preventDefault();
+      undoRef.current();
+    };
+    document.addEventListener("keydown", onUndo);
+    return () => document.removeEventListener("keydown", onUndo);
+  }, [isEditing]);
+
+  // Rename…: edit mode opens with the keyboard in the title field, its text selected. After the
+  // grid's own landing (child effects run first), so this one wins.
+  const renaming = useRef(false);
+  const rename = () => { if (!askForDraft() && startEditing(null)) renaming.current = true; };
+  useLayoutEffect(() => {
+    const input = titleInput.current;
+    if (!renaming.current || !input) return;
+    renaming.current = false;
+    input.focus();
+    input.select();
+  });
+
   // The owner read failed and Try again worked: its button went with the message, and the
-  // keyboard goes to the title rather than <body>.
+  // keyboard goes to the title rather than <body>. The same when the read fails while the keyboard
+  // is on Suggestions or in the rail: both go with the failure, before the page is painted.
   const ownerRetry = useRef<HTMLButtonElement>(null);
   const failed = ctx.ownerFailure !== null;
   const wasFailed = useRef(failed);
   useLayoutEffect(() => {
-    const active = document.activeElement;
-    if (wasFailed.current && !failed && (active === null || active === document.body)) title.current?.focus({ preventScroll: true });
+    if (wasFailed.current !== failed && focusLost()) title.current?.focus({ preventScroll: true });
     wasFailed.current = failed;
   }, [failed]);
   // The same for the dashboard's own re-read: its Try again went with the notice.
@@ -534,6 +741,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
   const copyAction: MenuAction = { label: "Copy dashboard…", onSelect: () => setAsking("copy") };
   const exportAction: MenuAction = { label: "Export as JSON", onSelect: () => { setUpdatedText(null); exporter.run("dashboard", dashboard.id, dashboard.title); } };
   const actions: MenuAction[] = ready ? [copyAction, exportAction] : [
+    { label: "Rename…", onSelect: rename },
     copyAction,
     exportAction,
     ...(ownerName ? [{ label: `Import into ${ownerName}…`, onSelect: () => openInNewTab({ page: "import", target: { kind: dashboard.owner_kind, id: dashboard.owner_id } }) }] : []),
@@ -569,20 +777,34 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         ownerName={dashboard.owner_name || ctx.ownerName} onOwner={openOwner} readyMade={ready}
         tabs={tabs} tab={tab} tabIds={tabIds} onTab={selectTab} tabRefs={tabRefs}
         timeControl={<TimeRangePicker time={ctx.time} open={timeOpen} onOpen={() => setTimeOpen(true)} onClose={closeTime} onPick={pickTime} buttonRef={timeButton} />}
-        refreshControl={<RefreshControl value={ctx.refresh} onRefresh={refreshNow} buttonRef={refreshButton}
+        refreshControl={<RefreshControl value={ctx.refresh} fixed={ctx.fixedRange} onRefresh={refreshNow} buttonRef={refreshButton}
           onChange={(r: RefreshSpec) => replace({ refresh: r })} />}
         editRef={editButton} onEdit={copyToEdit.busy ? undefined : edit} moreRef={moreButton} actions={actions}
         badge={editing ? <EditingPill /> : undefined}
+        titleField={editing ? { value: editing.draft.title, onChange: retitle, inputRef: titleInput, problem: titleProblem } : undefined}
         afterTitle={offer.draft && !editing
-          ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft} />
+          ? <DraftBanner draft={offer.draft} version={dashboard.version} onRestore={restoreDraft} onDiscard={discardDraft}
+              restoreRef={restoreButton} asked={askedDraft} />
           : undefined}
         editControls={editing
-          ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton} />
+          ? <EditControls saving={editor.saving} onDiscard={() => discard()} onSave={() => { void save(); }} discardRef={discardButton} saveRef={saveButton}
+              suggestions={tab === "dashboard" && !ctx.ownerFailure ? { open: railShown, onToggle: toggleSuggestions } : undefined} suggestionsRef={suggestionsButton}
+              undo={{ can: canUndo(editing), onUndo: undo }}
+              variables={{ onOpen: openVariables, buttonRef: variablesButton }} />
           : undefined} />
       {reread && <RereadNotice failed={reread} buttonRef={rereadRetry} />}
       {editing && !editor.draftsWork && <DraftsOffNotice />}
       {!editing && elsewhere && <EditedElsewhere buttonRef={goElsewhere} onGo={goToEditingTab} />}
       <p className={s.arrived} role="status">{editing ? arrivedWords : ""}</p>
+      <p className={s.saved} role="status">{saved !== null ? `Saved "${saved}".` : ""}</p>
+      {removedShown && removed && <RemovedNote title={removed.title} onUndo={undo} />}
+      {/* Spoken by the status line below; shown here so the refusal is seen too. */}
+      {jsonPending && undoRefused && (
+        <div className={e.notice} data-kind="json" data-undo-refused="">
+          <p className={e.noticeLine}>{JSON_FIRST}</p>
+        </div>
+      )}
+      <p className={s.said} role="status" aria-live="polite"><span key={said.seq}>{editing ? said.text : ""}</span></p>
       {copyToEdit.error && <p className={s.copyProblem} role="alert">{copyToEdit.error.text}</p>}
       <div className={s.transferLines}><ExportLine result={exporter.result} /></div>
       <p className={s.transferDone} role="status">{updatedText ?? ""}</p>
@@ -591,7 +813,7 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         <SaveConflict version={conflict} saved={dashboard} draft={editing.draft} saving={editor.saving} error={otherError}
           onSaveOver={(version, base) => { void editor.saveOver(version, base); }} />
       )}
-      {editing && conflict === null && otherError && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
+      {editing && conflict === null && otherError && !(tab === "json" && otherError.message === JSON_SAVE_REFUSED) && <EditNotice error={otherError} onShowJson={() => selectTab("json")} actionRef={showInJson} />}
       {asking === "copy" && (
         <CopyDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)}
           onCopied={(out) => { setAsking(null); openMade(out, { edit: false }, opener); }} />
@@ -603,9 +825,13 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         <DeleteDashboardDialog dashboard={dashboard} restoreFocusTo={moreButton} onCancel={() => setAsking(null)} onDeleted={deleted} />
       )}
       {searching && editing && (
-        <AddPanelSearch owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
+        <AddPanelSearch suggestions={suggestions} owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name} ownerKind={dashboard.owner_kind}
           vars={ctx.vars} range={ctx.range} draft={editing.draft} refused={refused}
           onAdd={addFromSearch} onEmpty={emptyFromSearch} onClose={() => setSearching(false)} restoreFocusTo={searchOpener} />
+      )}
+      {askVariables && editing && (
+        <VariablesDialog draft={editing.draft} ownerKind={dashboard.owner_kind} owner={ctx.owner} restoreFocusTo={variablesButton}
+          onCancel={() => setAskVariables(false)} onApply={applyVariables} />
       )}
       {askDiscard && editing && (
         <DiscardDialog title={editing.base.title || dashboard.title} restoreFocusTo={askDiscard}
@@ -635,16 +861,17 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
             <VariablesBar projects={ctx.projects} projectsLoading={ctx.owner === null} variables={ctx.variables}
               onVar={setVar} onProjects={(value) => setVar(PROJECTS_VAR, value)} onRetry={ctx.retryVariable}
               onOpenProject={(p, e) => openPage({ page: "project", id: p.id }, e)} />
-            <RailLayout rail={editing && editing.suggestions === "open" ? (
-              <SuggestionsRail owner={ctx.owner} ownerName={ctx.ownerName || dashboard.owner_name}
-                ownerKind={dashboard.owner_kind} vars={ctx.vars} range={ctx.range} draft={editing.draft}
-                onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel} />
+            <RailLayout rail={editing && railShown ? (
+              <SuggestionsRail suggestions={suggestions} ownerName={ctx.ownerName || dashboard.owner_name}
+                ownerKind={dashboard.owner_kind} draft={editing.draft}
+                onAdd={addFromRail} onClose={hideSuggestions} onEscape={toAddPanel}
+                focusRequest={railFocus} onFocused={() => setRailFocus(null)} />
             ) : null}>
             <DashboardGrid dashboardId={dashboard.id} panels={spec.panels} owner={ctx.owner} ownerName={ctx.ownerName}
               vars={ctx.vars} range={ctx.range} waiting={ctx.waiting} blocked={ctx.blocked} refreshSeq={ctx.refreshSeq} status={ctx.status}
               editor={editing ? {
                 state: editing, dispatch: editor.dispatch, ownerKind: dashboard.owner_kind, onLeave: () => saveButton.current?.focus(),
-                saveProblems, openRule,
+                saveProblems, openRule, onRemoved,
               } : undefined}
               onAddPanel={editing ? openSearch : undefined} controls={grid}
               board={editing !== null && editing.suggestions === "open" && editing.draft.panels.length === 0}
@@ -654,8 +881,9 @@ function DashboardScreen({ view, tabId, dashboard, reread, nav, openInNewTab, ac
         )}
         {tab === "json" && (ready
           ? <ReadyMadeJson spec={dashboard.spec} onCopy={copyToEdit.busy ? undefined : edit} />
-          : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => startEditing(null)}
-              onSave={save} lastSaved={editor.lastSaved} onDiscard={discard} saving={editor.saving} flushRef={flushJson} />)}
+          : <JsonTab dashboard={dashboard} editing={editing} dispatch={editor.dispatch} onStartEditing={() => !askForDraft() && startEditing(null)}
+              onSave={save} lastSaved={editor.lastSaved} discardRef={discardButton} problemFocus={editor.jsonRefusals}
+              saving={editor.saving} flushRef={flushJson} />)}
         {tab === "versions" && !ready && (
           <VersionsTab dashboard={dashboard} restoreBlocked={restoreBlocked} onRestored={() => selectTab("dashboard")} />
         )}

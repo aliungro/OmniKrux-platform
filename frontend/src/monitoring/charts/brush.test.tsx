@@ -210,6 +210,36 @@ describe("selecting a window on the time series", () => {
     expect(outer).not.toHaveBeenCalled();
   });
 
+  it("Esc hides the crosshair tooltip", () => {
+    vi.useFakeTimers();
+    const onSelect = vi.fn();
+    const tipText = () => document.body.querySelector('[role="status"]')?.textContent ?? "";
+    // With a selection: Esc shows all again and the keyboard's tooltip goes with it.
+    const { unmount } = render(<ChartView {...base({ onSelect, selection: { start: START + 60, end: START + 600 } })} />);
+    const chart = screen.getByRole("img");
+    act(() => chart.focus());
+    fireEvent.keyDown(chart, { key: "ArrowRight" });
+    expect(tipText()).not.toBe("");
+    fireEvent.keyDown(chart, { key: "Escape" });
+    expect(onSelect).toHaveBeenCalledWith(null, "keyboard");
+    expect(tipText()).toBe("");
+    expect(document.activeElement).toBe(chart);
+    unmount();
+    // While Shift+arrows choose a window: Esc drops the band and the tooltip.
+    render(<ChartView {...base({ onSelect })} />);
+    const again = screen.getByRole("img");
+    act(() => again.focus());
+    fireEvent.keyDown(again, { key: "ArrowRight" });
+    fireEvent.keyDown(again, { key: "ArrowRight", shiftKey: true });
+    expect(band()).toBeTruthy();
+    fireEvent.keyDown(again, { key: "Escape" });
+    expect(band()).toBeNull();
+    expect(tipText()).toBe("");
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(again);
+  });
+
   it("Esc without a selection keeps the crosshair's behaviour", () => {
     const onSelect = vi.fn();
     const outer = vi.fn();

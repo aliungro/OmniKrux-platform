@@ -7,7 +7,8 @@ import { render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SourceForm } from "./SourceForm";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
-import { isQueryable, sourceTypeLabel, whereLabel } from "./sourceLabels";
+import { isQueryable, sortLinks, sourceTypeLabel, stateWords, whereLabel } from "./sourceLabels";
+import { intercept } from "../test/dashboardSeeds";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -147,18 +148,33 @@ describe("deleting a source", () => {
     return installFakeMonitoringApi({ sources: [prom], projects: [dev] }, fallback);
   };
 
-  it("delete review opens on its action button and Ctrl+Enter confirms", async () => {
+  it("delete review opens on Cancel and Ctrl+Enter confirms", async () => {
     const api = seed();
     open();
     fireEvent.click(await screen.findByRole("button", { name: "Delete Prom" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Delete source Prom?" });
     expect(await within(dialog).findByText("Projects that use it lose it: Dev.")).toBeTruthy();
     const go = within(dialog).getByRole("button", { name: "Delete source" });
-    expect(document.activeElement).toBe(go);
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(go, { key: "Enter", ctrlKey: true });
     await waitFor(() => expect(api.state.sources).toHaveLength(0));
     expect(await screen.findByText("No sources yet. Add one here or while setting up a project.")).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("Enter on Cancel cancels the delete and gives the keyboard back", async () => {
+    const api = seed();
+    open();
+    const opener = await screen.findByRole("button", { name: "Delete Prom" });
+    fireEvent.click(opener);
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete source Prom?" });
+    await within(dialog).findByText("Projects that use it lose it: Dev.");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(document.activeElement).toBe(cancel);
+    await userEvent.setup().keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(api.state.sources).toHaveLength(1);
+    expect(document.activeElement).toBe(opener);
   });
 
   it("stale delete review asks again", async () => {
@@ -375,5 +391,231 @@ describe("Sources OmniKrux installed", () => {
     expect(within(theirs).queryByRole("button", { name: "Monitoring tools" })).toBeNull();
     await user.click(within(ours).getByRole("button", { name: "Monitoring tools" }));
     await waitFor(() => expect(current().tabs[0].view).toEqual({ page: "tools", clusterId: "c1" }));
+  });
+});
+
+describe("leaving a source form with changes", () => {
+  it("closing the tab while a source is edited asks first", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    expect(document.activeElement).not.toBe(document.body);
+    const close = screen.getByRole("button", { name: "Close Sources" });
+    const address = screen.getByLabelText("Address") as HTMLInputElement;
+    await user.type(address, "/x");
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(close);
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "Prom" with unsaved changes?' });
+    expect(within(ask).getByText("Leaving loses what you entered in this form.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("http://prom.example:9090/x");
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Typed back to how it started: nothing to lose, nothing asked.
+    await user.type(screen.getByLabelText("Address"), "{Backspace}{Backspace}");
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a new source form asks under its own name, and Cancel lets the tab go", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "sources" }, { page: "home" }) });
+    const off = () => expect(document.activeElement).not.toBe(document.body);
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    off();
+    await user.type(screen.getByLabelText("Address"), "http://new.example:9090");
+    off();
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New source" with unsaved changes?' });
+    off();
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    off();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    off();
+    await user.click(screen.getByRole("button", { name: "Close Sources" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    off();
+  });
+
+  it("another source's page is a way out of an edited source; the same source is not", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom"), source("s2", "Other")] }, fallback);
+    const { navigate, current } = renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    const off = () => expect(document.activeElement).not.toBe(document.body);
+    await screen.findByRole("heading", { name: "Prom" });
+    await user.type(screen.getByLabelText("Address"), "/x");
+    off();
+    // The same source again (a link to it) keeps the form: nothing asked, nothing lost.
+    navigate({ page: "source", id: "s1" }, "push");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("http://prom.example:9090/x");
+    off();
+    // Another source (Find, a link) would remount the form: asked first.
+    navigate({ page: "source", id: "s2" }, "push");
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "Prom" with unsaved changes?' });
+    expect(current().tabs[0].view).toEqual({ page: "source", id: "s1" });
+    off();
+    await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
+    expect(await screen.findByRole("heading", { name: "Other" })).toBeTruthy();
+    expect(current().tabs[0].view).toEqual({ page: "source", id: "s2" });
+    off();
+  });
+});
+
+const NOW = () => new Date().toISOString();
+const down = (over: Partial<SourceOut["health"]> = {}): SourceOut["health"] =>
+  ({ state: "down", message: "Prom answered, but not as a Prometheus API (HTTP 404). Check the address and the type.", version: null, checked_at: NOW(), ...over });
+
+describe("state words and order", () => {
+  it("names a state, and a source that answers is not called unreachable", () => {
+    expect(stateWords({ state: "up", message: null, version: null, checked_at: NOW() }, "loki")).toBe("Up");
+    expect(stateWords({ state: "unknown", message: null, version: null, checked_at: null }, "loki")).toBe("Not checked yet");
+    expect(stateWords(down(), "prometheus")).toBe("Can't be reached");
+    expect(stateWords(down({ answered: true }), "prometheus")).toBe("Answers, but not as Prometheus");
+    expect(stateWords(down({ answered: true }), "loki")).toBe("Answers, but not as Loki");
+    expect(stateWords(down({ answered: true }), "alertmanager")).toBe("Answers, but not as Alertmanager");
+  });
+
+  it("orders Prometheus, Loki, Alertmanager, then by name", () => {
+    const l = (source_type: "prometheus" | "loki" | "alertmanager", source_name: string) => ({ source_type, source_name });
+    const sorted = sortLinks([l("alertmanager", "A"), l("loki", "Z"), l("prometheus", "Y"), l("prometheus", "B"), l("loki", "C")]);
+    expect(sorted.map((x) => x.source_name)).toEqual(["B", "Y", "C", "Z", "A"]);
+  });
+
+  it("a source that answers is not called unreachable on the list", async () => {
+    installFakeMonitoringApi({ sources: [source("s1", "Prom"), source("s2", "Other")], health: { s1: down({ answered: true }), s2: down({ message: "Can't reach Other: the connection was refused." }) } }, fallback);
+    open();
+    expect(await screen.findByText("Answers, but not as Prometheus")).toBeTruthy();
+    expect(screen.getByText("Can't be reached")).toBeTruthy();
+  });
+});
+
+describe("Sources page, states and words", () => {
+  it("the sources list shows the full Used by on hover", async () => {
+    const used = [{ id: "p1", name: "Alpha" }, { id: "p2", name: "Beta" }, { id: "p3", name: "Gamma" }];
+    installFakeMonitoringApi({ sources: [source("s1", "Prom", { used_by: used, url: "http://prom.example:9090/very/long/path" })] }, fallback);
+    open();
+    const usedBy = await screen.findByText("Used by Alpha, Beta, Gamma");
+    expect(usedBy.getAttribute("title")).toBe("Used by Alpha, Beta, Gamma");
+    expect(screen.getByText("http://prom.example:9090/very/long/path").getAttribute("title")).toBe("http://prom.example:9090/very/long/path");
+  });
+
+  it("rows read Checking until the first health read", async () => {
+    installFakeMonitoringApi({ sources: [source("s1", "Prom")], health: { s1: { state: "up", message: null, version: "3", checked_at: NOW() } } }, fallback);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    intercept((url, pass) => (url.startsWith("/api/monitoring/sources/health") ? held.then(pass) : null));
+    open();
+    expect(await screen.findByText("Checking…")).toBeTruthy();
+    expect(screen.queryByText("Not checked yet")).toBeNull();
+    release();
+    expect(await screen.findByText("Up")).toBeTruthy();
+    expect(screen.queryByText("Checking…")).toBeNull();
+  });
+});
+
+describe("Source form, states and words", () => {
+  it("switching type clears the old test result and sets that type's placeholder", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Connected · version fake")).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    expect(screen.queryByText("Connected · version fake")).toBeNull();
+    expect((screen.getByLabelText("Address") as HTMLInputElement).placeholder).toBe("http://loki.example:3100");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("saving a source that failed its test says so", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    open();
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) =>
+      url === "/api/monitoring/sources/test" ? Promise.resolve(json({ ok: false, version: null, message: "connection refused" })) : real(url, init));
+    await user.click(await screen.findByRole("button", { name: "Add a source" }));
+    await user.type(screen.getByLabelText("Address"), "http://prom.example:9090");
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("connection refused")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.state.sources).toHaveLength(1));
+    const name = api.state.sources[0].name;
+    expect((await screen.findByText(`Saved ${name}. It didn't answer the last test, so its panels say so until it does.`)).getAttribute("role")).toBe("status");
+  });
+
+  it("editing keeps the name and locks an in-cluster type", async () => {
+    const user = userEvent.setup();
+    const inCluster = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "prom", port: "9090", has_ca: true });
+    const api = installFakeMonitoringApi({ sources: [inCluster, source("s2", "By address")] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Prom in dev" }));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Prom in dev");
+    expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
+    expect(document.querySelector("[data-fixed-type]")?.textContent).toBe("Prometheus-compatible");
+    expect(screen.queryByLabelText(/CA certificate/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(await screen.findByRole("button", { name: "Edit By address" }));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("By address");
+    expect(screen.getByLabelText(/CA certificate/)).toBeTruthy();
+    expect(api.requests.some((r) => r.method === "PATCH")).toBe(false);
+  });
+
+  it("the source page shows its state and Test", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ sources: [source("s1", "Prom", { used_by: [{ id: "p1", name: "Dev" }] })], health: { s1: down({ answered: true }) } }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "source", id: "s1" }) });
+    expect(await screen.findByRole("heading", { level: 1, name: "Prom" })).toBeTruthy();
+    expect(await screen.findByText("Answers, but not as Prometheus")).toBeTruthy();
+    expect(screen.getByText("Used by Dev")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Test Prom" }));
+    expect(await screen.findByText(/Connected · version fake/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Delete Prom" }));
+    expect(await screen.findByRole("alertdialog")).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+});
+
+describe("Source form, fix round 1", () => {
+  it("the buttons, not only the message, are scrolled into view", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      open();
+      await user.click(await screen.findByRole("button", { name: "Add a source" }));
+      await user.click(screen.getByRole("button", { name: "Save source" }));
+      await screen.findByRole("alert");
+      expect(scrolled.at(-1)?.contains(screen.getByRole("button", { name: "Test connection" }))).toBe(true);
+      expect(scrolled.at(-1)?.tagName).toBe("DIV");
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("an existing source's type is read-only text, and clearing the name says it is kept", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ sources: [source("s1", "Prom")] }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Prom" }));
+    expect(screen.queryByRole("combobox", { name: "Type" })).toBeNull();
+    expect(document.querySelector("[data-fixed-type]")?.textContent).toBe("Prometheus-compatible");
+    expect(screen.queryByText("Leave empty to keep the name.")).toBeNull();
+    await user.clear(screen.getByLabelText("Name"));
+    expect(screen.getByText("Leave empty to keep the name.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PATCH")).toBe(true));
+    expect(api.requests.find((r) => r.method === "PATCH")!.body).not.toHaveProperty("type");
   });
 });

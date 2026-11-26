@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { panel, spec } from "../../test/dashboardSeeds";
 import type { NewPanel } from "../layout";
 import { dashboardJson, newPanel, type DashboardSpec } from "../schema";
-import { changedPanelIds, editorReducer, hasUnsavedWork, isDirty, isDraftEdit, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
+import { canUndo, changedPanelIds, editorReducer, hasUnsavedWork, isDirty, isDraftEdit, UNDO_LIMIT, VIEW, type EditingState, type EditorAction, type EditorState } from "./editorState";
 
 const doc = (): DashboardSpec => spec("API latency", [
   panel("p-1", "Requests", "up", { x: 0, y: 0, w: 12, h: 8 }),
@@ -247,5 +247,140 @@ describe("insertPanel", () => {
     const bad = edit(run(start(spec("Empty", [])), { type: "setJson", text: "{ nope", ownerKind: "project" }));
     expect(bad.jsonText).not.toBeNull();
     expect(edit(run(bad, { type: "suggestions", open: false })).suggestions).toBe("closed");
+  });
+});
+
+describe("undo", () => {
+  const ids = (s: EditingState) => s.draft.panels.map((p) => p.id);
+  const json = (s: EditingState, change: (d: DashboardSpec) => void): EditorAction => {
+    const next = structuredClone(s.draft);
+    change(next);
+    return { type: "setJson", text: dashboardJson(next), ownerKind: "project" };
+  };
+
+  it("undo brings back a removed panel", () => {
+    const s0 = start();
+    expect(s0.past).toEqual([]);
+    expect(canUndo(s0)).toBe(false);
+    const s1 = edit(run(s0, { type: "removePanel", id: "p-1" }));
+    expect(s1.past).toHaveLength(1);
+    expect(canUndo(s1)).toBe(true);
+    const s2 = edit(run(s1, { type: "undo" }));
+    expect(ids(s2)).toEqual(["p-1", "p-2"]);
+    expect(s2.draft.panels[0]).toEqual(s0.draft.panels[0]);
+    expect(isDirty(s2)).toBe(false);
+    expect(s2.past).toEqual([]);
+    expect(canUndo(s2)).toBe(false);
+    expect(isDraftEdit({ type: "undo" })).toBe(true);
+    expect(isDraftEdit({ type: "duplicatePanel", id: "p-1" })).toBe(true);
+  });
+
+  it("typing in one panel's settings is one undo step", () => {
+    const s0 = start();
+    const s1 = edit(run(s0, retitle("p-1", "R"), retitle("p-1", "Re"), retitle("p-1", "Req")));
+    expect(s1.past).toHaveLength(1);
+    expect(s1.pastKey).toBe("updatePanel:p-1");
+    // Another panel's settings are a step of their own; so is a move between them.
+    const s2 = edit(run(s1, retitle("p-2", "E"), retitle("p-2", "Er")));
+    expect(s2.past).toHaveLength(2);
+    const s3 = edit(run(s2, { type: "undo" }));
+    expect(s3.draft.panels.map((p) => p.title)).toEqual(["Req", "Errors"]);
+    const s4 = edit(run(s3, { type: "undo" }));
+    expect(s4.draft.panels.map((p) => p.title)).toEqual(["Requests", "Errors"]);
+    // After an undo, the next keystroke in the same panel is a new step.
+    const s5 = edit(run(s1, { type: "undo" }, retitle("p-1", "X"), retitle("p-1", "XY")));
+    expect(s5.past).toHaveLength(1);
+  });
+
+  it("remove, then typing in another panel's title, then undo twice: one step each", () => {
+    const s1 = edit(run(start(), { type: "removePanel", id: "p-1" }, retitle("p-2", "E"), retitle("p-2", "Er")));
+    const s2 = edit(run(s1, { type: "undo" }));
+    expect(ids(s2)).toEqual(["p-2"]);
+    expect(s2.draft.panels[0].title).toBe("Errors");
+    const s3 = edit(run(s2, { type: "undo" }));
+    expect(ids(s3)).toEqual(["p-1", "p-2"]);
+  });
+
+  it("undo stops at the start of the session", () => {
+    const s0 = start();
+    expect(run(s0, { type: "undo" })).toBe(s0);
+    const s1 = edit(run(s0, { type: "nudge", id: "p-1", dir: "down" }, { type: "undo" }));
+    expect(s1.draft.panels[0].layout).toEqual(s0.draft.panels[0].layout);
+    expect(run(s1, { type: "undo" })).toBe(s1);
+    // A resumed session starts afresh too.
+    const resumed = edit(run(s1, { type: "resume", dashboardId: "d1", baseVersion: 1, base: s0.base, draft: s0.base, jsonText: null }));
+    expect(resumed.past).toEqual([]);
+  });
+
+  it("undo is refused while the JSON doesn't apply", () => {
+    const s1 = edit(run(start(), { type: "removePanel", id: "p-1" }));
+    const broken = edit(run(s1, { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    expect(broken.past).toBe(s1.past);
+    expect(run(broken, { type: "undo" })).toBe(broken);
+    expect(broken.jsonText).toBe("{ nope");
+  });
+
+  it("JSON edits are one undo step", () => {
+    const s0 = start();
+    const s1 = edit(run(s0, { type: "removePanel", id: "p-1" }));
+    const a = edit(run(s1, json(s1, (d) => { d.panels[0].title = "E"; })));
+    const b = edit(run(a, json(a, (d) => { d.panels[0].title = "Er"; })));
+    // Text that doesn't apply between two that do neither steps nor breaks the step.
+    const c = edit(run(b, { type: "setJson", text: "{ no", ownerKind: "project" }, json(b, (d) => { d.panels[0].title = "Err"; })));
+    expect(c.past).toHaveLength(2);
+    expect(c.pastKey).toBe("json");
+    const back = edit(run(c, { type: "undo" }));
+    expect(back.draft.panels.map((p) => p.title)).toEqual(["Errors"]);
+    expect(ids(edit(run(back, { type: "undo" })))).toEqual(["p-1", "p-2"]);
+  });
+
+  it("typing a title is one undo step", () => {
+    const s0 = start();
+    const title = (t: string): EditorAction => ({ type: "setDashboard", key: "title", update: (d) => ({ ...d, title: t }) });
+    const s1 = edit(run(s0, title("A"), title("AP"), title("API")));
+    expect(s1.past).toHaveLength(1);
+    expect(s1.pastKey).toBe("title");
+    expect(edit(run(s1, { type: "undo" })).draft.title).toBe("API latency");
+    // Typed back to where it began: nothing left to undo (an equal snapshot is dropped).
+    const s2 = edit(run(s0, title("API latenc"), title("API latency")));
+    expect(canUndo(s2)).toBe(false);
+    expect(edit(run(s2, { type: "undo" })).past).toEqual([]);
+    // A dashboard edit without a key is a step each time.
+    const plain = edit(run(s0, { type: "setDashboard", update: (d) => ({ ...d, title: "x" }) }, { type: "setDashboard", update: (d) => ({ ...d, title: "y" }) }));
+    expect(plain.past).toHaveLength(2);
+  });
+
+  it("keeps at most UNDO_LIMIT steps; saving in place and rebase keep them", () => {
+    let s = start();
+    for (let i = 0; i < UNDO_LIMIT + 5; i += 1) s = edit(run(s, retitle(i % 2 === 0 ? "p-1" : "p-2", `t${i}`)));
+    expect(s.past).toHaveLength(UNDO_LIMIT);
+    const rebased = edit(run(s, { type: "rebase", version: 2, base: s.draft }));
+    expect(rebased.past).toBe(s.past);
+    const stays = edit(run(s, { type: "saved", version: 3, spec: s.draft, sent: s.base }));
+    expect(stays.past).toBe(s.past);
+    expect(edit(run(s, { type: "discard" }, { type: "start", dashboardId: "d1", version: 3, spec: s.draft })).past).toEqual([]);
+  });
+
+  it("duplicate places a copy below with a new id and no alert", () => {
+    const base = doc();
+    base.panels[0].alert = {
+      name: "Slow", query: "A", of: "each", op: "above", threshold: 1, for: "5m", every: "1m", severity: "warning",
+      message: "", notify: [], engine: "omnikrux", channel: null,
+    };
+    const s0 = start(base);
+    const s1 = edit(run(s0, { type: "duplicatePanel", id: "p-1" }));
+    expect(ids(s1)).toEqual(["p-1", "p-2", "p-3"]);
+    const copy = s1.draft.panels[2];
+    expect(copy).toMatchObject({ id: "p-3", title: "Requests (copy)", alert: null, layout: { x: 0, y: 8, w: 12, h: 8 } });
+    expect(copy.queries).toEqual(s0.draft.panels[0].queries);
+    expect(s1.draft.panels[0]).toBe(s0.draft.panels[0]);
+    expect(s1.changes).toEqual({ "p-3": 1 });
+    expect(s1.past).toHaveLength(1);
+    // A long title is cut to 120 characters.
+    const long = edit(run(s0, retitle("p-1", "x".repeat(118)), { type: "duplicatePanel", id: "p-1" }));
+    expect(long.draft.panels[2].title).toHaveLength(120);
+    expect(run(s0, { type: "duplicatePanel", id: "nope" })).toBe(s0);
+    const broken = edit(run(s0, { type: "setJson", text: "{ nope", ownerKind: "project" }));
+    expect(run(broken, { type: "duplicatePanel", id: "p-1" })).toBe(broken);
   });
 });

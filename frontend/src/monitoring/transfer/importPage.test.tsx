@@ -566,4 +566,32 @@ describe("the Import page", () => {
     // Nothing of the file or the preview reaches the browser's storage.
     expect(JSON.stringify({ ...localStorage })).not.toContain("Node overview");
   });
+  it("alert fields use plain words", async () => {
+    const user = userEvent.setup();
+    const skipped = [
+      { where: 'Alert "High CPU"', what: "No data state NoData", reason: "OmniKrux shows a rule that has no data as can't check." },
+      { where: 'Alert "High CPU"', what: "Error state KeepLast", reason: "OmniKrux shows a rule that can't be checked as can't check." },
+      { where: 'Alert "Disk"', what: "No data state alerting", reason: "x" },
+      { where: 'Alert "Disk"', what: "Error state OK", reason: "y" },
+      { where: 'Alert "Disk"', what: "No data state Mystery", reason: "z" },
+    ];
+    setUp({ transfer: { previews: { [GRAFANA]: preview({ dashboards: [dash("a", "Node overview", { skipped })] }) } } });
+    const review = await pasteAndCheck(user);
+    await user.click(within(review).getByRole("button", { name: "Skipped (5)" }));
+    const lines = within(review).getAllByRole("listitem").map((li) => li.textContent);
+    expect(lines).toContain("When there's no data: it shows no data — OmniKrux shows a rule that has no data as can't check.");
+    expect(lines).toContain("When the query fails: it keeps its last state — OmniKrux shows a rule that can't be checked as can't check.");
+    expect(lines).toContain("When there's no data: it alerts — x");
+    expect(lines).toContain("When the query fails: it counts as OK — y");
+    expect(lines).toContain("When there's no data: Mystery — z");
+    expect(within(review).queryByText(/No data state|Error state/)).toBeNull();
+  });
+
+  it("the sentence above the mapping says how a source is chosen", async () => {
+    const user = userEvent.setup();
+    setUp();
+    const review = await pasteAndCheck(user);
+    expect(within(review).getByText("Each Grafana data source goes to the project source with the same address or service; otherwise to the first source of its type. The table says which.")).toBeTruthy();
+  });
+
 });

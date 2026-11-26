@@ -2,7 +2,8 @@
 // keyboard, "+ Add panel" sits in the free space, and the selected panel's settings open beside
 // the grid. The grid itself stays `DashboardGrid`, so panels keep running (and keep their data)
 // when edit mode starts or ends. Tile props are kept per panel while nothing a tile shows changes,
-// so an edit re-renders only the panel it touched (D1).
+// so an edit re-renders only the panel it touched (D1). Each tile's ⋯ (and its settings) duplicate
+// and remove it by mouse; `d` and Ctrl+Delete do the same from the keyboard.
 import {
   useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState,
   type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject,
@@ -10,16 +11,18 @@ import {
 import { isDeleteKey, pressed } from "../../../features/chrome/shortcuts";
 import { freeSpot, neighbour, placePanel, type Dir } from "../layout";
 import type { DashboardOwner } from "../runPanel";
-import { GRID_COLUMNS, type Layout, type OwnerKind, type PanelSpec, type Problem } from "../schema";
+import { GRID_COLUMNS, type DashboardSpec, type Layout, type OwnerKind, type PanelSpec, type Problem } from "../schema";
+import { ActionsMenu } from "../page/DashboardHeader";
 import { pageLetter } from "../page/keys";
 import { AddPanelTile, cellStyle } from "./AddPanelTile";
-import { editorReducer, isDraftEdit, JSON_FIRST, type EditingState, type EditorAction, type SideTab } from "./editorState";
+import { editorReducer, isDraftEdit, JSON_FIRST, type EditingState, type EditorAction, type EditorState, type SideTab } from "./editorState";
 import { panelName, SidePanel, type PanelLive } from "./SidePanel";
 import s from "./EditableGrid.module.css";
 
 export interface GridEditor {
   state: EditingState;
-  dispatch(action: EditorAction): void;
+  /** Applies the action; the state it made, where the editor gives it (the same objects the page draws). */
+  dispatch(action: EditorAction): EditorState | void;
   /** Esc on a tile (settings closed): the keyboard goes to Save dashboard. */
   onLeave(): void;
   ownerKind: OwnerKind;
@@ -27,6 +30,8 @@ export interface GridEditor {
   saveProblems?: readonly Problem[];
   /** Opens the Alerts page on a rule (a new workspace tab with Ctrl): the Alert tab's link. */
   openRule?(ruleId: string, newTab: boolean): void;
+  /** A panel was removed (by key, its ⋯ or its settings): the page says so with Undo. */
+  onRemoved?(title: string, draft: DashboardSpec): void;
 }
 
 /** What `PanelFrame` needs to be a tile. The same object while nothing it shows changes. */
@@ -45,6 +50,8 @@ export interface TileProps {
   report(id: string, live: PanelLive | null): void;
   grab: ReactNode;
   corner: ReactNode;
+  /** The ⋯ button and its menu: Settings, Duplicate, Remove. */
+  menu: ReactNode;
 }
 
 export interface GridEditing {
@@ -102,7 +109,7 @@ type Drag = {
   onEscape: (e: globalThis.KeyboardEvent) => void;
 };
 type Preview = { id: string; kind: "move" | "resize"; panels: PanelSpec[]; target: Layout; offset: { x: number; y: number } | null };
-type Settings = { open: boolean; focus: "tab" | "query" | "alert" | "none"; seq: number };
+type Settings = { open: boolean; focus: "tab" | "field" | "query" | "alert" | "none"; seq: number };
 /** The tile handlers, rebuilt each render; tiles call them through a ref so their props stay the same. */
 type Handlers = {
   key(id: string, e: KeyboardEvent<HTMLElement>): void;
@@ -110,6 +117,7 @@ type Handlers = {
   down(id: string, kind: Drag["kind"], e: PointerEvent<HTMLButtonElement>): void;
   move(e: PointerEvent<HTMLButtonElement>): void;
   up(e: PointerEvent<HTMLButtonElement>, apply: boolean): void;
+  menu(id: string, item: "settings" | "duplicate" | "remove"): void;
 };
 
 const movedWords = (id: string) => (n: EditingState) => {
@@ -203,8 +211,8 @@ export function useEditableGrid(
   const act = useCallback((action: EditorAction, say?: (next: EditingState) => string | null) => {
     const ed = latest.current;
     if (!ed || jsonBlocks(action)) return null;
-    const next = editorReducer(ed.state, action);
-    ed.dispatch(action);
+    const predicted = editorReducer(ed.state, action);
+    const next = ed.dispatch(action) ?? predicted;
     if (next.mode !== "edit") return null;
     if (say && next !== ed.state) {
       const words = say(next);
@@ -213,7 +221,10 @@ export function useEditableGrid(
     return next;
   }, [jsonBlocks]);
 
+  /** A tile to scroll into view once it is drawn (a new panel whose settings just opened). */
+  const scrollTo = useRef<string | null>(null);
   const openSettings = useCallback((id: string, focus: Settings["focus"]) => {
+    scrollTo.current = id;
     setCurrent(id);
     setSettings((was) => ({ open: true, focus, seq: was.seq + 1 }));
   }, []);
@@ -239,7 +250,18 @@ export function useEditableGrid(
     refocus.current = to ?? "add";
     setCurrent(to);
     if (latest.current?.state.selected === panel.id) setSettings((was) => ({ ...was, open: false }));
-    act({ type: "removePanel", id: panel.id }, () => `Removed "${panelName(panel)}". Discard brings it back.`);
+    const next = act({ type: "removePanel", id: panel.id }, () => `Removed "${panelName(panel)}". Ctrl+Z brings it back.`);
+    if (next && !panelIn(next, panel.id)) latest.current?.onRemoved?.(panelName(panel), next.draft);
+  };
+
+  /** A copy below the panel; the keyboard goes to the copy's tile. */
+  const duplicate = (panel: PanelSpec) => {
+    const before = latest.current?.state.draft.panels;
+    const next = act({ type: "duplicatePanel", id: panel.id }, () => `Duplicated "${panelName(panel)}".`);
+    const copy = next && before ? next.draft.panels.find((p) => !before.some((b) => b.id === p.id)) : undefined;
+    if (!copy) return;
+    refocus.current = copy.id;
+    setCurrent(copy.id);
   };
 
   /** Closes the settings; the keyboard goes to the selected tile, which keeps its highlight. */
@@ -315,6 +337,14 @@ export function useEditableGrid(
     if (!there) focusTile(want);
   });
 
+  // The panel whose settings opened is in view (a new one lands under the others, maybe far down).
+  useLayoutEffect(() => {
+    const id = scrollTo.current;
+    if (id === null) return;
+    scrollTo.current = null;
+    findTile(id)?.scrollIntoView?.({ block: "nearest" });
+  });
+
   useEffect(() => () => {
     const d = drag.current;
     if (d) window.removeEventListener("keydown", d.onEscape, true);
@@ -367,10 +397,13 @@ export function useEditableGrid(
         e.preventDefault();
         act({ type: "select", id });
         act({ type: "sideTab", tab: "query" });
-        openSettings(id, "tab");
+        openSettings(id, "field");
       } else if (isDeleteKey(e)) {
         e.preventDefault();
         remove(panel, panels);
+      } else if (pressed("panelDuplicate", e)) {
+        e.preventDefault();
+        duplicate(panel);
       } else if (pressed("panelLeave", e)) {
         e.preventDefault();
         // The settings close first; the next Esc goes to Save dashboard.
@@ -424,6 +457,17 @@ export function useEditableGrid(
       const d = drag.current?.pointer === e.pointerId ? drag.current : null;
       if (d) finish(d, apply);
     },
+    menu(id, item) {
+      const panel = panelIn(state, id);
+      if (!panel || drag.current) return;
+      if (item === "duplicate") duplicate(panel);
+      else if (item === "remove") remove(panel, panels);
+      else {
+        act({ type: "select", id });
+        act({ type: "sideTab", tab: "query" });
+        openSettings(id, "field");
+      }
+    },
   };
   const on = () => handlers.current!;
 
@@ -464,6 +508,13 @@ export function useEditableGrid(
       report,
       grab: handle(id, name, "move"),
       corner: handle(id, name, "resize"),
+      menu: (
+        <ActionsMenu label={`Panel actions for ${name}`} className={s.tileMenu} tabIndex={-1} returnTo={() => focusTile(id)} actions={[
+          { label: "Settings", onSelect: () => on().menu(id, "settings") },
+          { label: "Duplicate", onSelect: () => on().menu(id, "duplicate") },
+          { label: "Remove", danger: true, onSelect: () => on().menu(id, "remove") },
+        ]} />
+      ),
     };
     tiles.current.set(id, { sig, tile: made });
     return made;
@@ -487,7 +538,8 @@ export function useEditableGrid(
       ? (
         <SidePanel key={selected.id} state={state} dispatch={settingsDispatch} owner={owner} ownerKind={editor.ownerKind}
           panelData={live?.data ?? null} live={live} initialFocus={settings.focus} seq={settings.seq} onClose={closeSettings}
-          saveProblems={editor.saveProblems} onOpenRule={editor.openRule} />
+          saveProblems={editor.saveProblems} onOpenRule={editor.openRule}
+          onDuplicate={() => duplicate(selected)} onRemove={() => remove(selected, panels)} />
       )
       : null,
     live: <p className={s.live} role="status" aria-live="polite"><span key={message.seq}>{message.text}</span></p>,

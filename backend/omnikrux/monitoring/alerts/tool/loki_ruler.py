@@ -39,6 +39,7 @@ from omnikrux.audit.store import (
     Outcome,
     no_audit_message,
 )
+from omnikrux.monitoring.alerts.rule_expr import same_query_text
 from omnikrux.monitoring.alerts.store import (
     HistoryKind,
     HistoryRecord,
@@ -248,7 +249,7 @@ class LokiRuler:
                 and row.engine == "tool"
                 and row.tool_kind == "loki_ruler"
                 and row.source_id == obj.source_id
-                and row.rule_text == target.rule_text
+                and same_query_text(row.rule_text, target.rule_text)
             )
             mark_unread(row, now())
             await services.alerts.set_tool(

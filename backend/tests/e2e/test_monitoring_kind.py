@@ -206,10 +206,14 @@ def dashboard(client, id: str) -> dict:
     return response.json()
 
 
-def fill_in(text: str, document: dict) -> str:
-    """The query as the browser sends it: variables stand for every value (`.+`), the built-in
-    ones for a one-hour range at step 30."""
-    values = {v["name"]: ".+" for v in document["variables"]} | BUILTINS
+def fill_in(
+    text: str, document: dict, chosen: dict[str, str] | None = None, builtins: dict | None = None
+) -> str:
+    """The query as the browser sends it: variables stand for every value (`.+`) unless `chosen`
+    names one, the built-in ones for a one-hour range at step 30."""
+    values = (
+        {v["name"]: ".+" for v in document["variables"]} | (chosen or {}) | (builtins or BUILTINS)
+    )
     for name in sorted(values, key=len, reverse=True):
         text = text.replace("${" + name + "}", values[name]).replace("$" + name, values[name])
     return text
@@ -217,12 +221,11 @@ def fill_in(text: str, document: dict) -> str:
 
 def panel_requests(project: dict, document: dict, now: float) -> list[tuple[dict, dict]]:
     """(panel, request) for every query of every panel, ready for `POST /query/batch`."""
-    source_id = link_of(project, "prometheus")["source_id"]
     out = []
     for panel in document["panels"]:
         for q in panel["queries"]:
             request = {
-                "source_id": source_id,
+                "source_id": link_of(project, q["source"]["type"])["source_id"],
                 "project_id": project["id"],
                 "query": fill_in(q["expr"], document),
             }
@@ -295,6 +298,109 @@ def test_node_health_on_the_cluster(client, prometheus_project):
     assert nodes["series"], "kube_node_info has no series: is kube-state-metrics running?"
     count = nodes["series"][0]["points"][0][1]
     assert len(busy["series"]) == count
+
+
+# --- Ready-made views over both Prometheus (the operator's first, then prometheus-server) --------
+#
+# The operator's Prometheus (kps) holds cAdvisor's metrics but not kube-state-metrics'; the
+# plain prometheus-server holds both. These run the ready-made query texts on a real Prometheus:
+# FakePrometheus can't evaluate PromQL.
+
+NO_OPERATOR_PROMETHEUS = "The operator's Prometheus isn't installed in the monitoring namespace."
+REPLICASET_HASH = re.compile(r"-[0-9a-f]{8,10}$")
+
+
+@pytest.fixture
+def two_prometheus_project(client, cluster, tools):
+    """A Kubernetes project linking the operator's Prometheus first, then prometheus-server."""
+    response = client.get(f"{API}/discovery/{cluster}")
+    assert response.status_code == 200, response.text
+    operator = reachable(response.json()["found"], "prometheus", OPERATOR_PROMETHEUS)
+    if operator is None:
+        pytest.skip(NO_OPERATOR_PROMETHEUS)
+    sources = [
+        {"source": new_source(cluster, tool), "filter": ""}
+        for tool in (operator, tools["prometheus"])
+    ]
+    with project_cleanup(client) as made:
+        project = set_up(client, cluster, "Kind two Prometheus", sources)
+        made.append(project["id"])
+        yield project
+
+
+def ready_panel(client, project: dict, key: str, title: str) -> list[dict]:
+    """The series of the ready-made view's panel, each query run against the source it names."""
+    document = dashboard(client, ready_views(client, project)[key]["id"])["spec"]
+    [panel] = [p for p in document["panels"] if p["title"] == title]
+    now = time.time()
+    requests = []
+    for q in panel["queries"]:
+        request = {
+            "source_id": q["source"]["id"],
+            "project_id": project["id"],
+            "query": fill_in(q["expr"], document),
+        }
+        if panel["type"] in ("bar", "table"):
+            request |= {"kind": "instant", "time": now}
+        else:
+            request |= {"kind": "range", "start": now - HOUR, "end": now, "step": STEP}
+        requests.append(request)
+    results = run_batch(client, requests)
+    assert all(r["ok"] for r in results), results
+    return [s for r in results for s in r["response"]["series"]]
+
+
+def last_value(series: dict) -> float | None:
+    values = [p[1] for p in series["points"] if p[1] is not None]
+    return values[-1] if values else None
+
+
+def test_ready_made_reads_the_prometheus_with_kube_state_metrics(client, two_prometheus_project):
+    project = two_prometheus_project
+    server = project["links"][1]
+    views = ready_views(client, project)
+    cluster_view = views["cluster"]
+    assert cluster_view["checked"], cluster_view["check_message"]
+    assert cluster_view["source_name"] == server["source_name"], cluster_view
+    assert cluster_view["missing"] == [] and cluster_view["notes"] == [], cluster_view
+    document = dashboard(client, cluster_view["id"])["spec"]
+    ids = {q["source"]["id"] for p in document["panels"] for q in p["queries"]}
+    assert ids == {server["source_id"]}
+
+    [ready] = ready_panel(client, project, "cluster", "Nodes ready")
+    assert (last_value(ready) or 0) >= 1
+    [not_ready] = ready_panel(client, project, "cluster", "Nodes not ready")
+    assert last_value(not_ready) == 0
+
+
+def test_cpu_requested_is_a_share_of_scheduled_requests(client, two_prometheus_project):
+    for title in ("CPU requested", "Memory requested"):
+        [share] = ready_panel(client, two_prometheus_project, "cluster", title)
+        value = last_value(share)
+        assert value is not None and 0 < value < 1.0, (title, value)
+
+
+def test_workloads_have_no_replicaset_names(client, two_prometheus_project):
+    for title in ("CPU by workload", "Memory by workload"):
+        series = ready_panel(client, two_prometheus_project, "workloads", title)
+        assert series, title
+        names = [
+            f"{s['labels'].get('namespace', '')}/{s['labels'].get('workload', '')}" for s in series
+        ]
+        # Every Pod has a workload (a bare or static Pod's is "(no owner)"), never a ReplicaSet.
+        assert all(not name.endswith("/") for name in names), names
+        assert not [n for n in names if REPLICASET_HASH.search(n)], names
+        assert len(names) == len(set(names)), names
+
+
+def test_node_health_uses_node_names(client, two_prometheus_project):
+    views = ready_views(client, two_prometheus_project)
+    if "node_exporter" in views["nodes"]["missing"]:
+        pytest.skip(NO_NODE_EXPORTER)
+    nodes = set(kubectl("get", "nodes", "-o", "jsonpath={.items[*].metadata.name}").split())
+    for title in ("CPU busy", "Memory used", "Fullest disk", "Network received"):
+        series = ready_panel(client, two_prometheus_project, "nodes", title)
+        assert {s["labels"].get("nodename") for s in series} == nodes, title
 
 
 def test_dashboard_lifecycle_on_the_cluster(client, prometheus_project):
@@ -1139,3 +1245,132 @@ def test_update_from_source_with_no_change(client, cluster, tools, grafana_targe
         )
         assert preview.status_code == 200, preview.text
         assert preview.json()["same"] is True
+
+
+# --- Log views and empty reasons on the OpenTelemetry labels --------------------------------------
+
+OTEL_NAMESPACE = "k8s_namespace_name"
+OTEL_POD = "k8s_pod_name"
+LOG_WINDOW = 6 * HOUR
+LOG_STEP = 60
+LOG_BUILTINS = {"__interval": "60s", "__rate_interval": "4m", "__range": "6h"}
+
+
+def ready_document(client, project: dict, key: str) -> dict:
+    return dashboard(client, ready_views(client, project)[key]["id"])["spec"]
+
+
+def run_logs_panel(
+    client, project: dict, document: dict, title: str, chosen: dict[str, str] | None = None
+) -> list[dict]:
+    """The answers of a ready-made panel over the last six hours, one per query; each query is
+    sent to the source of its own type."""
+    now = time.time()
+    [panel] = [p for p in document["panels"] if p["title"] == title]
+    requests = []
+    for q in panel["queries"]:
+        request = {
+            "source_id": link_of(project, q["source"]["type"])["source_id"],
+            "project_id": project["id"],
+            "query": fill_in(q["expr"], document, chosen, LOG_BUILTINS),
+        }
+        if panel["type"] in ("bar", "table"):
+            request |= {"kind": "instant", "time": now}
+        else:
+            request |= {"kind": "range", "start": now - LOG_WINDOW, "end": now, "step": LOG_STEP}
+        if panel["type"] == "logs":
+            request["limit"] = 100
+        requests.append(request)
+    results = run_batch(client, requests)
+    for result in results:
+        code = (result.get("error") or {}).get("code")
+        assert code != "bad_query", f"{title}: {result['error']}"
+    assert all(r["ok"] for r in results), results
+    return [r["response"] for r in results]
+
+
+def why_empty(client, project: dict, type: str, **body) -> dict:
+    now = time.time()
+    response = client.post(
+        f"{API}/query/why-empty",
+        json={
+            "source_id": link_of(project, type)["source_id"],
+            "project_id": project["id"],
+            "start": now - HOUR,
+            "end": now,
+        }
+        | body,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_logs_overview_runs_on_otel_labels(client, both_project):
+    project = both_project
+    views = ready_views(client, project)
+    view = views["logs"]
+    assert view["title"] == "Logs overview", view
+    assert view["checked"], view["check_message"]
+    assert view["notes"] == [], view
+    document = dashboard(client, view["id"])["spec"]
+    selectors = [q["expr"] for p in document["panels"] for q in p["queries"]]
+    assert selectors and all(OTEL_NAMESPACE in text for text in selectors), selectors
+
+    answers = {
+        p["title"]: run_logs_panel(client, project, document, p["title"])
+        for p in document["panels"]
+    }
+    assert answers["Log lines per second"][0]["series"], "no log lines per second on the cluster"
+
+
+def test_pod_health_logs_use_otel_labels(client, both_project):
+    project = both_project
+    document = ready_document(client, project, "pods")
+    [panel] = [p for p in document["panels"] if p["title"] == "Logs"]
+    selector = panel["queries"][0]["expr"]
+    assert OTEL_NAMESPACE in selector and OTEL_POD in selector, selector
+    [answer] = run_logs_panel(client, project, document, "Logs", {"namespace": "monitoring"})
+    lines = [line for stream in answer["streams"] for _, line in stream["entries"]]
+    assert lines, "the Logs panel for namespace monitoring and every Pod returned no lines"
+
+
+def test_pod_restarts_are_whole_numbers(client, both_project):
+    project = both_project
+    document = ready_document(client, project, "pods")
+    [answer] = run_logs_panel(client, project, document, "Restarts")
+    values = [p[1] for s in answer["series"] for p in s["points"] if p[1] is not None]
+    if not values:
+        pytest.skip("No Pod restarted in the last 6 hours, so there is nothing to check.")
+    assert all(v == int(v) and v > 0 for v in values), sorted(set(values))
+
+
+def test_why_empty_on_the_cluster(client, both_project):
+    project = both_project
+    never = why_empty(
+        client, project, "prometheus",
+        query="omnikrux_never_collected_total", metrics=["omnikrux_never_collected_total"],
+    )  # fmt: skip
+    assert never["reason"] == "missing_metric", never
+    assert "omnikrux_never_collected_total" in never["message"]
+
+    selector = f'{{{OTEL_POD}="omnikrux-no-such-pod"}}'
+    nobody = why_empty(client, project, "loki", query=selector, selector=selector)
+    assert nobody["reason"] == "no_streams", nobody
+
+    throttled = "container_cpu_cfs_throttled_periods_total"
+    present = query(client, project, "prometheus", kind="instant", query=f"count({throttled})")
+    if present["series"]:
+        pytest.skip(
+            f"The cluster collects {throttled}, so there is no CPU throttling answer to check."
+        )
+    answer = why_empty(client, project, "prometheus", query=throttled, metrics=[throttled])
+    assert answer["reason"] == "missing_metric", answer
+    assert "CPU throttling" in answer["message"], answer
+
+
+def test_catalog_lists_otel_streams(client, both_project):
+    loki = catalog_of(client, both_project)["loki"]
+    assert loki["stream_window_seconds"] == 604800, loki["stream_window_seconds"]
+    streams = {s["name"]: s for s in loki["streams"]}
+    assert OTEL_NAMESPACE in streams, sorted(streams)
+    assert streams[OTEL_NAMESPACE]["values"], streams[OTEL_NAMESPACE]

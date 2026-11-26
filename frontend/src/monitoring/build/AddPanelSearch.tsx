@@ -1,28 +1,32 @@
 // "+ Add panel" as "type what you want to see" (D3). One field over the owner's catalog: with no
-// text it lists the suggestions, with text the finder's matches (150 ms after the last key). The
-// first few cards preview live; the keyboard stays in the field (↑ ↓ pick, Enter adds, Ctrl+End
-// goes to Empty panel, Esc clears and then closes). Empty panel, always last, is M2's blank time
-// series. Matching is fixed rules over names, help text and labels: no AI, no paid service.
+// text it lists the suggestions, with text the finder's matches (150 ms after the last key). Every
+// card previews live; the suggestions and their previews are the page's, shared with the
+// suggestions column. The keyboard stays in the field (↑ ↓ pick, Enter adds, Ctrl+End goes to
+// Empty panel, Esc clears and then closes). Empty panel, always last, is M2's blank time series.
+// Matching is fixed rules over names, help text and labels: no AI, no paid service.
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { failure } from "../../api/http";
 import { DialogShell } from "../../features/dock/ConfirmDialog";
-import { catalogAge, useOwnerCatalog } from "../catalog/merge";
+import { catalogAge } from "../catalog/merge";
 import type { ResolvedVars } from "../dashboards/interpolate";
 import type { NewPanel } from "../dashboards/layout";
 import type { DashboardOwner } from "../dashboards/runPanel";
 import { nextPanelId, type DashboardSpec, type OwnerKind } from "../dashboards/schema";
-import { candidatePanel, type Candidate } from "./candidates";
+import { candidatePanel, heldKeys, type Candidate } from "./candidates";
 import { buildFinderIndex, findPanels } from "./finder";
+import HelpTip from "./HelpTip";
 import PreviewCard from "./PreviewCard";
-import { suggestionsHeading, suggestPanels } from "./suggest";
 import { usePreviews } from "./usePreviews";
+import type { Suggestions } from "./useSuggestions";
 import s from "./AddPanelSearch.module.css";
 
 export const SEARCH_DEBOUNCE_MS = 150;
 
 export interface AddPanelSearchProps {
-  /** `null` while the dashboard's owner is still being read. */
+  /** The page's one suggestion source (`useSuggestions`): its catalog, suggestions and their previews. */
+  suggestions: Suggestions;
+  /** `null` while the dashboard's owner is still being read. Typed text previews with it. */
   owner: DashboardOwner | null;
   ownerName: string;
   ownerKind: OwnerKind;
@@ -42,7 +46,7 @@ export interface AddPanelSearchProps {
   restoreFocusTo?: RefObject<HTMLElement | null>;
 }
 
-export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft, onAdd, onEmpty, onClose, refused = null, restoreFocusTo }: AddPanelSearchProps) {
+export function AddPanelSearch({ suggestions, owner, ownerName, ownerKind, vars, range, draft, onAdd, onEmpty, onClose, refused = null, restoreFocusTo }: AddPanelSearchProps) {
   const base = useId();
   const ids = { heading: `${base}-h`, list: `${base}-l`, hint: `${base}-k`, option: (i: number) => `${base}-o${i}` };
   const input = useRef<HTMLInputElement>(null);
@@ -56,16 +60,21 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     return () => clearTimeout(timer);
   }, [text]);
 
-  const cat = useOwnerCatalog(owner);
+  const cat = suggestions.catalog;
   const catalog = cat.catalog;
   const index = useMemo(() => (catalog ? buildFinderIndex(catalog) : null), [catalog]);
+  const suggested = suggestions.candidates;
   const listFor = useCallback((words: string): Candidate[] => {
     if (!catalog || !index) return [];
-    return words.trim() === "" ? suggestPanels(catalog) : findPanels(index, words);
-  }, [catalog, index]);
+    return words.trim() === "" ? suggested : findPanels(index, words);
+  }, [catalog, index, suggested]);
   const candidates = useMemo(() => listFor(query), [listFor, query]);
   const searching = query.trim() !== "";
-  const previews = usePreviews(candidates, { owner, ownerName, vars, range });
+  // Typed text previews its own matches; with no text the suggestions' previews are the page's.
+  const found = usePreviews(searching ? candidates : [], { owner, ownerName, vars, range });
+  const previews = searching ? found : suggestions.previews;
+  // What the dashboard already holds says Added here, as in the suggestions column.
+  const added = useMemo(() => heldKeys(candidates, draft.panels), [candidates, draft.panels]);
 
   // The active option: the first, until the arrows move it; a new list starts at its first again.
   const listKey = JSON.stringify([query, candidates.map((c) => c.key)]);
@@ -74,6 +83,29 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
   const empty = candidates.length;
   const active = picked.key === listKey ? Math.min(picked.at, count - 1) : 0;
   const moveTo = (at: number) => setPicked({ key: listKey, at: (at + count) % count });
+  const results = useRef<HTMLDivElement>(null);
+  /** Cards in one grid row, measured: the options that share the first one's top. */
+  const columns = () => {
+    const opts = Array.from(results.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+    if (opts.length === 0) return 1;
+    const top = opts[0].getBoundingClientRect().top;
+    const n = opts.findIndex((o) => Math.abs(o.getBoundingClientRect().top - top) > 1);
+    return n === -1 ? 1 : n; // all in one row: up and down step by card
+  };
+  const moveRow = (down: boolean) => {
+    const cols = columns();
+    const last = count - 1;
+    if (down) {
+      if (active + cols <= last) moveTo(active + cols);
+      else if (Math.floor(active / cols) < Math.floor(last / cols)) moveTo(last); // a short last row
+      else moveTo(active % cols); // down from the last row wraps to the top of the column
+    } else if (active - cols >= 0) moveTo(active - cols);
+    else {
+      let at = Math.floor(last / cols) * cols + (active % cols); // up from the first row wraps to the bottom of the column
+      if (at > last) at -= cols;
+      moveTo(at);
+    }
+  };
 
   useEffect(() => {
     document.getElementById(`${base}-o${active}`)?.scrollIntoView?.({ block: "nearest" });
@@ -86,10 +118,21 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     else add(candidates[i], from ?? rectOf(i));
   };
 
+  const atEdge = (e: KeyboardEvent<HTMLInputElement>) => {
+    const t = e.currentTarget;
+    if (t.value === "") return true;
+    if (t.selectionStart !== t.selectionEnd) return false;
+    return e.key === "ArrowLeft" ? t.selectionStart === 0 : t.selectionStart === t.value.length;
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      moveTo(active + (e.key === "ArrowDown" ? 1 : -1));
+      moveRow(e.key === "ArrowDown");
+    } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && atEdge(e)) {
+      // Left and right move by card; inside typed text they move the caret, until it reaches that end.
+      e.preventDefault();
+      moveTo(active + (e.key === "ArrowRight" ? 1 : -1));
     } else if (e.key === "End" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       moveTo(empty);
@@ -134,7 +177,7 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     );
   };
 
-  const reading = !catalog && !cat.error && (owner === null || cat.loading);
+  const reading = !catalog && !cat.error;
   const readFailed = !catalog && !reading ? (refreshError ?? cat.error) : null;
   // Try again worked: its button went with the failure, and the keyboard goes back to the field.
   const failedShown = readFailed !== null;
@@ -145,13 +188,13 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
     hadFailed.current = failedShown;
   }, [failedShown]);
   const nothing = searching && catalog !== null && candidates.length === 0;
-  const found = searching && candidates.length > 0
+  const matches = searching && candidates.length > 0
     ? `${candidates.length} ${candidates.length === 1 ? "panel matches" : "panels match"}.`
     : "";
   const age = catalog ? catalogAge(catalog.builtAt, Date.now()) : "";
   const statusText = reading ? `Reading what ${ownerName}'s sources have…`
     : readFailed ? `Couldn't read the metrics: ${readFailed}`
-      : nothing ? "Nothing matches yet. Try another word." : found;
+      : nothing ? "Nothing matches yet. Try another word." : matches;
 
   return (
     <DialogShell provider="monitoring" role="dialog" busy={false} onCancel={onClose} first={input}
@@ -162,7 +205,7 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
         <input ref={input} className={s.input} type="text" autoComplete="off" spellCheck={false}
           role="combobox" aria-label="What do you want to see" aria-expanded="true" aria-autocomplete="list"
           aria-controls={ids.list} aria-activedescendant={ids.option(active)} aria-describedby={ids.hint}
-          aria-keyshortcuts="ArrowUp ArrowDown Enter Control+End Escape"
+          aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Control+End Escape"
           placeholder="Type what you want to see, like errors by route"
           value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown} />
         <span id={ids.hint} className={s.hint}>{active === 0 ? "Enter adds the first" : "Enter adds the highlighted one"}</span>
@@ -179,22 +222,33 @@ export function AddPanelSearch({ owner, ownerName, ownerKind, vars, range, draft
             </button>
           )}
         </div>
-        {catalog && !searching && <h3 className={s.heading}>{suggestionsHeading(ownerName, catalog)}</h3>}
-        {catalog && [...catalog.problems, ...catalog.notes].map((n) => <p key={n} className={s.muted}>{n}</p>)}
+        {catalog && (!searching || catalog.notes.length > 0) && (
+          <div className={s.headingRow}>
+            {!searching && <h3 className={s.heading}>{suggestions.heading}</h3>}
+            {catalog.notes.length > 0 && (
+              <HelpTip label="About this list">
+                {catalog.notes.map((n) => <span key={n} className={s.tipLine}>{n}</span>)}
+              </HelpTip>
+            )}
+          </div>
+        )}
+        {catalog && catalog.problems.map((n) => <p key={n} className={s.muted}>{n}</p>)}
 
-        <div role="listbox" id={ids.list} aria-label="Results" className={s.results}>
+        <div ref={results} role="listbox" id={ids.list} aria-label="Results" className={s.results}>
           {candidates.map((c, i) => (
             <PreviewCard key={c.key} option id={ids.option(i)} candidate={c} preview={previews[c.key]}
-              active={i === active} onPick={(rect) => pick(i, rect)} />
+              active={i === active} added={added.has(c.key)} onPick={(rect) => pick(i, rect)} />
           ))}
           <div role="option" id={ids.option(empty)} aria-selected={active === empty}
             aria-labelledby={`${ids.option(empty)}-t`} aria-describedby={`${ids.option(empty)}-d`}
             className={s.empty} data-active={active === empty ? "true" : undefined}
             onMouseDown={(e) => e.preventDefault()} onClick={() => pick(empty)}>
-            <span className={s.emptyMark} aria-hidden="true">+</span>
-            <span className={s.emptyTitle} id={`${ids.option(empty)}-t`}>Empty panel</span>
+            <span className={s.emptyHead}>
+              <span className={s.emptyMark} aria-hidden="true">＋</span>
+              <span className={s.emptyTitle} id={`${ids.option(empty)}-t`}>Empty panel</span>
+              {active === empty && <span className={s.emptyKey}>Enter to add</span>}
+            </span>
             <span className={s.emptyLine} id={`${ids.option(empty)}-d`}>Write the query yourself.</span>
-            {active === empty && <span className={s.emptyKey}>Enter to add</span>}
           </div>
         </div>
       </div>

@@ -19,6 +19,8 @@
   /* Chart series 7 and 8 (orchid, lime): apart from the series above and from ok, warn and bad. */
   --series-7: #A858C8;
   --series-8: #E0F800;
+  /* Chart series 5 (rose): the grey it replaces sat too near the sky blue beside it. Charts only. */
+  --series-5: #F27A9A;
   --scroll-thumb: #3A3452;
   --scroll-thumb-hover: #5A5080;
 }

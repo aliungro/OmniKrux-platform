@@ -38,6 +38,8 @@ export interface AlertsView {
   page: "alerts";
   tab?: "rules" | "silences" | "contacts";
   rule?: string;
+  /** Silence this alert: the page opens New silence prefilled once, then drops it. */
+  silence?: { rule: string; target: string };
 }
 
 /** Explore and its state: the project, the source, the query, the logs query and the time range. */
@@ -232,6 +234,8 @@ function parseAlerts(x: Record<string, unknown>): AlertsView {
   const view: AlertsView = { page: "alerts" };
   if (ALERTS_TABS.includes(x.tab)) view.tab = x.tab as AlertsView["tab"];
   if (validId(x.rule)) view.rule = x.rule;
+  const ask = x.silence;
+  if (record(ask) && validId(ask.rule) && validId(ask.target)) view.silence = { rule: ask.rule, target: ask.target };
   return view;
 }
 

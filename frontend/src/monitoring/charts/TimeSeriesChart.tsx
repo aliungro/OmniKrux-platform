@@ -1,6 +1,12 @@
 // The time series panel: a canvas sized to its box at the device pixel ratio, a crosshair with a
 // tooltip (mouse, or the arrow keys on the focused chart), and the legend. Option and query edits
-// morph the lines; refreshes, resizes and reduced motion jump.
+// morph the lines; refreshes, resizes and reduced motion jump. The tooltip lists the ten biggest
+// values and counts the rest, and is placed inside the window; hovering or focusing a legend item
+// highlights its series (the others dim, no colour changes).
+//
+// Nothing is drawn outside the chart's box: the plot layer (canvas, axes, legend) clips, a short
+// plot draws no axis labels and no legend, and the tooltip lives on the page itself (a portal,
+// placed against the window), so a short panel never cuts it.
 //
 // With `onSelect` (Explore only) a window can be chosen: drag across the plot, or Shift+arrows from
 // the crosshair; the band stays drawn over the full range, and log line `marks` tick the bottom.
@@ -10,11 +16,13 @@ import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type KeyboardEvent, type MouseEvent, type PointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import type { ChartSeries } from "../dashboards/runPanel";
 import type { PanelSpec } from "../dashboards/schema";
-import { buildFrame, drawTimeSeries, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
+import { buildFrame, drawTimeSeries, roomForLabels, type AlertBand, type ChartMark, type ChartRange, type FrameSeries, type TimeSeriesFrame } from "./drawTimeSeries";
 import { resolveToken, seriesColors } from "./colors";
 import Legend from "./Legend";
+import { placeTip, tipRows } from "./tooltip";
 import { easeOutCubic, MORPH_MS, mixColumns, tween, usePrefersReducedMotion } from "./motion";
 import { formatTooltipTime } from "./scale";
 import { formatValue } from "./units";
@@ -54,6 +62,8 @@ const NO_MARKS: readonly ChartMark[] = [];
 const CLICK_PX = 4;
 /** Shift+arrows select once the keys rest this long. */
 const KEY_SELECT_MS = 300;
+/** The most a legend takes under the plot (two rows and its margin). */
+const LEGEND_ROOM = 52;
 
 /** The spacing of the samples (their median gap), so a window snaps to the data's own step. */
 function sampleStep(samples: number[]): number {
@@ -127,44 +137,72 @@ export default function TimeSeriesChart({
   panel, series, range, animate, changeId, editId, selection = null, onSelect, marks = NO_MARKS as ChartMark[], step: runStep, alert = null,
 }: TimeSeriesChartProps) {
   const opts = panel.options;
+  const rootRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawn = useRef<Drawn | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // The whole chart's height (plot and legend), which the legend's presence doesn't change: 0 until measured.
+  const [boxHeight, setBoxHeight] = useState(0);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(NO_HIDDEN);
   const [cursor, setCursor] = useState<number | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
   const reduced = usePrefersReducedMotion();
   const dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1;
 
-  // Size from the box, not the window.
+  // Size from the box, not the window. The chart's own height decides whether a legend fits under
+  // the plot; it is read apart from the plot's, so the legend coming or going can't flip it back.
   useLayoutEffect(() => {
     const el = plotRef.current;
-    if (!el) return;
+    const root = rootRef.current;
+    if (!el || !root) return;
     const apply = (w: number, h: number) => {
       const width = Math.max(0, Math.floor(w));
       const height = Math.max(0, Math.floor(h));
       setSize((s) => (s.width === width && s.height === height ? s : { width, height }));
     };
+    const applyBox = (h: number) => setBoxHeight(Math.max(0, Math.floor(h)));
     if (typeof ResizeObserver === "undefined") {
       const r = el.getBoundingClientRect();
       apply(r.width, r.height);
+      applyBox(root.getBoundingClientRect().height);
       return;
     }
     const ro = new ResizeObserver((entries) => {
       const box = entries[entries.length - 1]?.contentRect;
       if (box) apply(box.width, box.height);
     });
+    const rootRo = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect;
+      if (box) applyBox(box.height);
+    });
     ro.observe(el);
-    return () => ro.disconnect();
+    rootRo.observe(root);
+    return () => {
+      ro.disconnect();
+      rootRo.disconnect();
+    };
   }, []);
 
   // The same tokens the frame draws with, for the tooltip and the legend.
   const colors = useMemo(() => seriesColors(series), [series]);
+  // A new list only when the series change, so the legend can tell a refresh from a hover.
+  const legendItems = useMemo(
+    () => series.map((s) => ({ key: s.key, name: s.name, color: colors.get(s.key) as string })),
+    [series, colors],
+  );
+  // A highlighted series that a refresh took away is forgotten, so it doesn't light up again
+  // when it comes back without a hover or focus.
+  useEffect(() => {
+    if (highlighted !== null && !series.some((s) => s.key === highlighted)) setHighlighted(null);
+  }, [series, highlighted]);
   const frame = useMemo(
     () => (size.width > 0 && size.height > 0
-      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert)
+      ? buildFrame(series, opts, { ...size, dpr }, { start: range.start, end: range.end }, hidden, alert, runStep, highlighted)
       : null),
-    [series, opts, size, dpr, range.start, range.end, hidden, alert],
+    [series, opts, size, dpr, range.start, range.end, hidden, alert, runStep, highlighted],
   );
 
   // Paint. An edit morphs from what is on the canvas; anything else jumps.
@@ -190,7 +228,7 @@ export default function TimeSeriesChart({
     const colorOf = (token: string) => resolveToken(style, token);
 
     const edited = prev !== null && prev.target !== frame && (changeId > prev.changeId || editId > prev.editId);
-    if (!(animate && !reduced && edited && sameShape(prev.shown, frame))) {
+    if (!(animate && !reduced && edited && frame.style !== "bars" && sameShape(prev.shown, frame))) {
       drawTimeSeries(ctx, frame, colorOf, marks);
       return;
     }
@@ -223,13 +261,20 @@ export default function TimeSeriesChart({
 
   const visible = useMemo(() => series.filter((s) => !hidden.has(s.key)), [series, hidden]);
 
-  // The crosshair moves between the longest visible series' own samples.
+  // The crosshair moves between the longest visible series' own samples; for bars, between every
+  // visible series' sample times, since each series holds only the steps where it has a bar.
+  const barStyle = opts.style === "bars";
   const samples = useMemo(() => {
+    if (barStyle) {
+      const times = new Set<number>();
+      for (const s of visible) for (const p of s.points) if (p[0] >= range.start && p[0] <= range.end) times.add(p[0]);
+      return [...times].sort((a, b) => a - b);
+    }
     let best: ChartSeries | null = null;
     for (const s of visible) if (!best || s.points.length > best.points.length) best = s;
     if (!best) return [];
     return best.points.map((p) => p[0]).filter((t) => t >= range.start && t <= range.end);
-  }, [visible, range.start, range.end]);
+  }, [visible, barStyle, range.start, range.end]);
   const at = cursor !== null && samples.length > 0 ? Math.min(cursor, samples.length - 1) : null;
   const span = range.end - range.start;
 
@@ -353,14 +398,17 @@ export default function TimeSeriesChart({
       return;
     }
     if (e.key === "Escape" && onSelect) {
+      // Either way the keyboard's tooltip goes too: nothing is left standing over the chart.
       if (keyBandRef.current) {
         e.stopPropagation();
         stopKeyBand();
+        setCursor(null);
         return;
       }
       if (selection) {
         // Shows all again; the crosshair's own Esc is for when nothing is selected.
         e.stopPropagation();
+        setCursor(null);
         onSelect(null, "keyboard");
         return;
       }
@@ -376,17 +424,63 @@ export default function TimeSeriesChart({
     }
   };
 
-  let tip: { x: number; time: string; rows: { key: string; name: string; color: string; value: number | null; text: string }[] } | null = null;
+  type TipRow = { key: string; name: string; color: string; value: number | null; text: string };
+  let tip: { x: number; time: string; rows: TipRow[]; more: number } | null = null;
   if (at !== null && frame) {
     const t = samples[at];
-    const tolerance = samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
-    const rows = visible.map((s) => {
-      const v = valueAt(s.points, t, tolerance);
-      return { key: s.key, name: s.name, color: colors.get(s.key) as string, value: v, text: formatValue(v, opts.unit, opts.decimals) };
-    });
-    rows.sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
-    tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows };
+    const tolerance = barStyle ? step / 2 : samples.length > 1 ? ((samples[samples.length - 1] - samples[0]) / (samples.length - 1)) * 1.5 : Infinity;
+    const { shown, more } = tipRows(visible.map((s) => ({ s, value: valueAt(s.points, t, tolerance) })));
+    // One unit for the whole tooltip, from its largest value.
+    const largest = Math.max(0, ...shown.map(({ value }) => (value === null || !Number.isFinite(value) ? 0 : Math.abs(value))));
+    const rows = shown.map(({ s, value }): TipRow => ({
+      key: s.key, name: s.name, color: colors.get(s.key) as string, value, text: formatValue(value, opts.unit, opts.decimals, largest),
+    }));
+    tip = { x: frame.plot.x + ((t - range.start) / span) * frame.plot.w, time: formatTooltipTime(t), rows, more };
   }
+
+  // Placed after it is measured, before the browser paints (no frame in the wrong place): right of
+  // the crosshair unless the window ends there, and never past the window's top or bottom. The tip
+  // is fixed on the page, so the box's own place in the window is added to placeTip's answer, and a
+  // scroll or resize under a shown tip places it again. A chart that has left the view (the window,
+  // or Monitoring's page area) takes its tip with it: the crosshair goes.
+  const tipX = tip?.x ?? null;
+  const tipTop = frame?.plot.y ?? 0;
+  const placeNow = useRef<() => void>(() => {});
+  placeNow.current = () => {
+    const el = tipRef.current;
+    const wrap = wrapRef.current;
+    if (!el || !wrap || tipX === null) return;
+    const box = wrap.getBoundingClientRect();
+    const area = wrap.closest("[data-monitoring-page]")?.getBoundingClientRect();
+    const top = Math.max(0, area?.top ?? 0);
+    const bottom = Math.min(window.innerHeight, area?.bottom ?? window.innerHeight);
+    // (A box with no size isn't laid out, say in a test: it is not called out of view.)
+    const laidOut = box.width > 0 || box.height > 0;
+    if (laidOut && (box.bottom <= top || box.top >= bottom || box.right <= 0 || box.left >= window.innerWidth)) {
+      setCursor(null);
+      return;
+    }
+    const place = placeTip(
+      { x: tipX, y: tipTop + 4 },
+      { width: el.offsetWidth, height: el.offsetHeight },
+      box,
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    el.style.left = `${place.left + box.left}px`;
+    el.style.top = `${place.top + box.top}px`;
+  };
+  useLayoutEffect(() => placeNow.current());
+  const tipShown = tipX !== null;
+  useEffect(() => {
+    if (!tipShown) return;
+    const again = () => placeNow.current();
+    window.addEventListener("scroll", again, { capture: true, passive: true });
+    window.addEventListener("resize", again);
+    return () => {
+      window.removeEventListener("scroll", again, { capture: true });
+      window.removeEventListener("resize", again);
+    };
+  }, [tipShown]);
 
   const solo = (key: string) => setHidden(() => {
     const onlyThis = visible.length === 1 && visible[0].key === key;
@@ -397,6 +491,9 @@ export default function TimeSeriesChart({
     if (!next.delete(key)) next.add(key);
     return next;
   });
+
+  // Only a series on the chart can be highlighted (one that went away with a refresh can't).
+  const lit = highlighted !== null && series.some((s) => s.key === highlighted) ? highlighted : null;
 
   const latest = series.slice(0, 3).map((s) => `${s.name} ${formatValue(lastValue(s), opts.unit, opts.decimals)}`);
   const chosenText = selection ? ` Window ${clockTime(selection.start)} – ${clockTime(selection.end)} selected.` : "";
@@ -416,9 +513,55 @@ export default function TimeSeriesChart({
     }
   }
 
+  // A legend only where the plot keeps room for its labels above it (not measured yet: as asked).
+  const showLegend = opts.legend === "bottom" && series.length > 0 && (boxHeight === 0 || roomForLabels(boxHeight - LEGEND_ROOM));
+  // Without its legend nothing could show a hidden series again or end a highlight: the chart
+  // draws every series, as its text alternative says.
+  useEffect(() => {
+    if (showLegend) return;
+    setHidden((h) => (h.size === 0 ? h : NO_HIDDEN));
+    setHighlighted(null);
+  }, [showLegend]);
+  // The legend going while one of its items has the keyboard (the box got too short, or the series
+  // went): noted while its buttons are still on the page, then the keyboard goes to the plot, never
+  // <body>. Outside the plot, the chart's only focusable things are the legend's.
+  const [legendWas, setLegendWas] = useState(showLegend);
+  const [refocusPlot, setRefocusPlot] = useState(false);
+  if (legendWas !== showLegend) {
+    setLegendWas(showLegend);
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    if (!showLegend && active && rootRef.current?.contains(active) && !plotRef.current?.contains(active)) setRefocusPlot(true);
+  }
+  useLayoutEffect(() => {
+    if (!refocusPlot) return;
+    setRefocusPlot(false);
+    const active = document.activeElement;
+    if (active === null || active === document.body || !active.isConnected) plotRef.current?.focus({ preventScroll: true });
+  }, [refocusPlot]);
+
+  const tipBox = (
+    <div ref={tipRef} role="status" className={styles.tip}>
+      {tip ? (
+        <>
+          <p className={styles.tipTime}>{tip.time}</p>
+          <ul className={styles.tipList}>
+            {tip.rows.map((r) => (
+              <li key={r.key} className={r.key === lit ? `${styles.tipRow} ${styles.tipLit}` : styles.tipRow}>
+                <span className={styles.swatch} style={{ background: `var(${r.color})` }} aria-hidden="true" />
+                <span className={styles.tipName} title={r.name}>{r.name}</span>
+                <span className={styles.tipValue}>{r.text}</span>
+              </li>
+            ))}
+          </ul>
+          {tip.more > 0 ? <p className={styles.tipMore}>and {tip.more} more</p> : null}
+        </>
+      ) : null}
+    </div>
+  );
+
   return (
-    <div className={styles.chart}>
-      <div className={styles.plotWrap}>
+    <div ref={rootRef} className={styles.chart}>
+      <div ref={wrapRef} className={styles.plotWrap}>
         <div
           ref={plotRef}
           className={styles.plot}
@@ -429,6 +572,8 @@ export default function TimeSeriesChart({
           onKeyDown={onKeyDown}
           onMouseMove={onMouseMove}
           onMouseLeave={() => setCursor(null)}
+          // The keyboard's crosshair goes with the keyboard (the pointer's, with the pointer).
+          onBlur={() => setCursor(null)}
         >
           <canvas ref={canvasRef} className={styles.canvas} aria-hidden="true" />
           {band && frame ? (
@@ -452,33 +597,16 @@ export default function TimeSeriesChart({
             <div className={styles.crosshair} style={{ left: tip.x, top: frame.plot.y, height: frame.plot.h }} aria-hidden="true" />
           ) : null}
         </div>
-        <div
-          role="status"
-          className={tip && frame && tip.x > frame.size.width * 0.6 ? `${styles.tip} ${styles.tipLeft}` : `${styles.tip} ${styles.tipRight}`}
-          style={tip && frame ? { left: tip.x, top: frame.plot.y + 4 } : undefined}
-        >
-          {tip ? (
-            <>
-              <p className={styles.tipTime}>{tip.time}</p>
-              <ul className={styles.tipList}>
-                {tip.rows.map((r) => (
-                  <li key={r.key} className={styles.tipRow}>
-                    <span className={styles.swatch} style={{ background: `var(${r.color})` }} aria-hidden="true" />
-                    <span className={styles.tipName}>{r.name}</span>
-                    <span className={styles.tipValue}>{r.text}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </div>
       </div>
-      {opts.legend === "bottom" && series.length > 0 ? (
+      {typeof document === "undefined" ? tipBox : createPortal(tipBox, document.body)}
+      {showLegend ? (
         <Legend
-          items={series.map((s) => ({ key: s.key, name: s.name, color: colors.get(s.key) as string }))}
+          items={legendItems}
           hidden={hidden}
           onSolo={solo}
           onToggle={toggle}
+          highlighted={lit}
+          onHighlight={setHighlighted}
         />
       ) : null}
     </div>

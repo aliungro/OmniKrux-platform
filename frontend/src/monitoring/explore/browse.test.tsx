@@ -9,6 +9,8 @@ import { intercept, linkedProject, linkTo, serverFailure } from "../test/dashboa
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonitoringApp";
 import type { ExploreView } from "../shell/tabState";
+import { windowWords } from "./BrowseList";
+import { readTrail } from "./trailStore";
 
 vi.mock("../charts", async () => {
   const { createElement } = await import("react");
@@ -76,7 +78,7 @@ describe("Browse metrics and log streams", () => {
   it("the list shows counts, names and types", async () => {
     prom();
     await openExplore();
-    expect(await screen.findByRole("heading", { name: "Metrics in prod-east · 4" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Metrics in s1 name · 4" })).toBeTruthy();
     const box = await list();
     expect(box.getAttribute("aria-keyshortcuts")).toBe("b");
     const option = within(box).getByRole("option", { name: /http_requests_total/ });
@@ -137,8 +139,8 @@ describe("Browse metrics and log streams", () => {
     await pickMetric(user, "kube_pod_container_status_restarts_total");
     const only = await screen.findByRole("group", { name: "Only" });
     const shown = [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
-    expect(shown.slice(0, 3)).toEqual(["namespace", "pod", "container"]);
-    expect(shown).toHaveLength(6);
+    // By how many values each has, then by name (uid gets no chips; labels without values get no row).
+    expect(shown).toEqual(["namespace", "container", "pod"]);
     await user.click(await within(only).findByRole("button", { name: "namespace=demo" }));
     expect(query().value).toBe('sum(rate(kube_pod_container_status_restarts_total{namespace="demo"}[$__rate_interval]))');
   });
@@ -154,7 +156,7 @@ describe("Browse metrics and log streams", () => {
     const only = await screen.findByRole("group", { name: "Only" });
     const order = () => [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
     const before = order();
-    expect(before).toEqual(["namespace", "pod", "container"]);
+    expect(before).toEqual(["pod", "container", "namespace"]);
     // The second label's chip, pressed and then un-pressed.
     const chip = await within(only).findByRole("button", { name: "pod=b" });
     await user.click(chip);
@@ -182,30 +184,237 @@ describe("Browse metrics and log streams", () => {
     expect(screen.getByRole("button", { name: "route=/x" })).toBeTruthy();
   });
 
-  it("more… opens the other values and returns the keyboard to its chip", async () => {
+  it("chips fold after eight values", async () => {
     const many = Array.from({ length: 12 }, (_, i) => `v${String(i).padStart(2, "0")}`);
-    prom(promCatalog(), { labelValues: { "p1|status": many } });
+    prom(promCatalog(), { labelValues: { "p1|status": many, "p1|pod": ["a", "b"] } });
     const user = userEvent.setup();
     await openExplore();
     await pickMetric(user, "http_requests_total");
     expect(await screen.findByRole("button", { name: "status=v07" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "status=v08" })).toBeNull();
-    const more = screen.getByRole("button", { name: "status: more…" });
-    await user.click(more);
-    const field = screen.getByRole("combobox", { name: "Filter values" });
-    expect(document.activeElement).toBe(field);
-    await user.keyboard("{Escape}");
+    // The rest open in place, never in a popover; the keyboard goes to the first value it shows.
+    const more = screen.getByRole("button", { name: "4 more" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    more.focus();
+    await user.keyboard("{Enter}");
     expect(screen.queryByRole("combobox", { name: "Filter values" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status: more…" }));
-    await user.click(screen.getByRole("button", { name: "status: more…" }));
-    await user.type(screen.getByRole("combobox", { name: "Filter values" }), "v10");
-    await user.click(screen.getByRole("option", { name: "v10" }));
-    expect(query().value).toContain('status="v10"');
-    expect(screen.getByRole("button", { name: "status=v10" }).getAttribute("aria-pressed")).toBe("true");
-    // Off again: its chip goes away, and the keyboard goes to the row's more….
-    await user.click(screen.getByRole("button", { name: "status=v10" }));
-    expect(screen.queryByRole("button", { name: "status=v10" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status: more…" }));
+    expect(screen.getByRole("button", { name: "status=v11" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "4 more" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status=v08" }));
+    await user.keyboard("{Enter}");
+    expect(query().value).toContain('status="v08"');
+    expect(screen.getByRole("button", { name: "status=v08" }).getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("high-cardinality labels get no chips", async () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => `pod-${i}`);
+    prom(catalogOf("p1", source("s1", {
+      built_at: BUILT,
+      metrics: [metric("container_cpu_usage_seconds_total", { type: "counter", labels: ["container_id", "id", "image_id", "namespace", "pod", "uid"] })],
+    })), { labelValues: { "p1|pod": sixty, "p1|namespace": ["demo", "web"], "p1|id": ["/a"], "p1|uid": ["u1"], "p1|container_id": ["c1"], "p1|image_id": ["i1"] } });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "container_cpu_usage_seconds_total");
+    const only = await screen.findByRole("group", { name: "Only" });
+    expect([...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label)).toEqual(["namespace"]);
+    expect(screen.queryByRole("button", { name: /^pod=/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(id|uid|container_id|image_id)=/ })).toBeNull();
+    const split = screen.getByRole("group", { name: "Split by" });
+    expect(within(split).queryByRole("button", { name: /^(id|uid|container_id|image_id|pod)$/ })).toBeNull();
+    expect(within(split).getByRole("button", { name: "namespace" })).toBeTruthy();
+  });
+
+  it("a stream label with many values gets no chips but stays in the list", async () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => `pod-${i}`);
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, streams: [stream("app", ["api", "web"]), stream("pod", sixty)] })) },
+      queryAnswers: new Proxy({} as never, { get: () => answer }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    await user.click(await within(box).findByRole("option", { name: "app = api" }));
+    const only = await screen.findByRole("group", { name: "Only" });
+    expect([...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label)).toEqual(["app"]);
+    expect(screen.queryByRole("button", { name: /^pod=/ })).toBeNull();
+    expect(within(box).getByRole("group", { name: "pod" })).toBeTruthy();
+  });
+
+  it("dropping a value of a label with many values hands the keyboard on", async () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => `pod-${i}`);
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, streams: [stream("namespace", ["demo", "web"]), stream("pod", sixty)] })) },
+      queryAnswers: new Proxy({} as never, { get: () => answer }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    // Pick a pod from the list: its line shows only that chip.
+    await user.click(await within(box).findByRole("option", { name: "pod = pod-1" }));
+    const only = await screen.findByRole("group", { name: "Only" });
+    const order = () => [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
+    expect(order()).toEqual(["pod", "namespace"]);
+    await user.click(within(only).getByRole("button", { name: "namespace=demo" }));
+    expect(query().value).toBe('{namespace="demo",pod="pod-1"}');
+    const pod = within(only).getByRole("button", { name: "pod=pod-1" });
+    pod.focus();
+    await user.keyboard("{Enter}");
+    // The pod is dropped, its line goes, and the keyboard moves to the next line's chip.
+    expect(query().value).toBe('{namespace="demo"}');
+    expect(order()).toEqual(["namespace"]);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(within(only).getByRole("button", { name: "namespace=demo" }));
+  });
+
+  it("a chip picked with Enter is kept even when empty; a clicked one only when it settles with data", async () => {
+    prom(promCatalog(), { queryAnswers: new Proxy({} as never, { get: () => ({ result_type: "matrix", series: [], took_ms: 3 }) }) });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    const keyed = 'sum by (route) (rate(http_requests_total{status="500"}[$__rate_interval]))';
+    const chip = await screen.findByRole("button", { name: "status=500" });
+    chip.focus();
+    await user.keyboard("{Enter}");
+    expect(query().value).toBe(keyed);
+    // An explicit run: kept on its answer, empty as it is.
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual([keyed]));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "status=500" }));
+    // A click is not explicit: an empty answer, left alone past the pause, isn't kept.
+    await user.click(screen.getByRole("button", { name: "status=404" }));
+    expect(query().value).toContain('status="404"');
+    await new Promise((r) => setTimeout(r, 2300));
+    expect(readTrail("p1").map((e) => e.expr)).toEqual([keyed]);
+  }, 10000);
+
+  it("chips keep their order after an Only", async () => {
+    const api = prom(catalogOf("p1", source("s1", {
+      built_at: BUILT,
+      metrics: [metric("kube_pod_info", { type: "gauge", labels: ["container", "namespace", "node", "pod"] })],
+    })), { labelValues: { "p1|namespace": ["demo", "kube-system"], "p1|pod": ["a", "b", "c"], "p1|container": ["c"], "p1|node": ["n1", "n2"] } });
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "kube_pod_info");
+    const only = await screen.findByRole("group", { name: "Only" });
+    const order = () => [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
+    // Most values first, then by name.
+    expect(order()).toEqual(["pod", "namespace", "node", "container"]);
+    const chips = () => [...only.querySelectorAll("button")].map((b) => b.textContent);
+    const before = chips();
+    await user.click(within(only).getByRole("button", { name: "namespace=demo" }));
+    // The other labels' values are read again under the chosen value; nothing moves meanwhile.
+    expect(order()).toEqual(["pod", "namespace", "node", "container"]);
+    expect(chips()).toEqual(before);
+    await waitFor(() => {
+      const read = api.requests.filter((r) => r.url.includes("label=pod")).at(-1);
+      expect(decodeURIComponent(read?.url ?? "")).toContain('match=kube_pod_info{namespace="demo"}');
+    });
+    // A label's own values are read without its own choice, so the others stay offered.
+    const own = api.requests.filter((r) => r.url.includes("label=namespace")).at(-1);
+    expect(decodeURIComponent(own?.url ?? "")).not.toContain('namespace="demo"');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(order()).toEqual(["pod", "namespace", "node", "container"]);
+    expect(document.activeElement).toBe(within(only).getByRole("button", { name: "namespace=demo" }));
+  });
+
+  it("a hand-edited query unpresses the chips", async () => {
+    prom();
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    await user.click(await screen.findByRole("button", { name: "status=500" }));
+    expect(screen.getByRole("button", { name: "status=500" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "route" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.change(query(), { target: { value: 'sum(rate(http_requests_total{status="404"}[5m]))' } });
+    expect(screen.getByRole("button", { name: "status=500" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "route" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText("You edited the query by hand. A chip now starts a new query from that chip.")).toBeTruthy();
+    // The list no longer says the text is that metric either.
+    expect(screen.getByRole("option", { name: /http_requests_total/ }).getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("a hand-edited log query leaves no stream chosen in the list", async () => {
+    loki();
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    await user.click(await within(box).findByRole("option", { name: "app = api" }));
+    expect(within(box).getByRole("option", { name: "app = api" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.change(query(), { target: { value: '{app="nope"}' } });
+    expect(within(box).getByRole("option", { name: "app = api" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("button", { name: "app=api" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("a chip after a hand edit starts from that chip", async () => {
+    prom();
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    await user.click(await screen.findByRole("button", { name: "status=500" }));
+    fireEvent.change(query(), { target: { value: "up" } });
+    await user.click(screen.getByRole("button", { name: "pod=a" }));
+    // The metric and split stay; the Only is that chip alone (status=500 is gone), not a toggle.
+    expect(query().value).toBe('sum by (route) (rate(http_requests_total{pod="a"}[$__rate_interval]))');
+    expect(screen.getByRole("button", { name: "pod=a" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "status=500" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByText(/You edited the query by hand/)).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "pod=a" }));
+  });
+
+  it("typing the chips' query again re-attaches them", async () => {
+    prom();
+    const user = userEvent.setup();
+    await openExplore();
+    await pickMetric(user, "http_requests_total");
+    await user.click(await screen.findByRole("button", { name: "status=500" }));
+    const text = query().value;
+    fireEvent.change(query(), { target: { value: `${text} x` } });
+    expect(screen.getByRole("button", { name: "status=500" }).getAttribute("aria-pressed")).toBe("false");
+    fireEvent.change(query(), { target: { value: text } });
+    expect(screen.getByRole("button", { name: "status=500" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByText(/You edited the query by hand/)).toBeNull();
+    // A chip toggles again.
+    await user.click(screen.getByRole("button", { name: "status=500" }));
+    expect(query().value).toBe("sum by (route) (rate(http_requests_total[$__rate_interval]))");
+  });
+
+  it("the list shows the full name on hover", async () => {
+    prom(catalogOf("p1", source("s1", {
+      built_at: BUILT,
+      metrics: [metric("aggregator_discovery_aggregation_count_total", { type: "counter", help: "[ALPHA] Counter of number of times discovery was aggregated", labels: ["job"] })],
+    })));
+    await openExplore();
+    const box = await list();
+    const option = await within(box).findByRole("option", { name: /aggregator_discovery/ });
+    const name = within(option).getByText("aggregator_discovery_aggregation_count_total");
+    expect(name.getAttribute("title")).toBe("aggregator_discovery_aggregation_count_total");
+    expect(option.getAttribute("aria-description")).toBe("[ALPHA] Counter of number of times discovery was aggregated");
+  });
+
+  it("the list filter clears with a new source", async () => {
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "prod-east", "s1", "s3")],
+      catalogs: {
+        p1: catalogOf("p1",
+          source("s1", { built_at: BUILT, metrics: [metric("kube_pod_info", { labels: ["pod"] }), metric("up", { labels: ["job"] })] }),
+          source("s3", { built_at: BUILT, metrics: [metric("node_load1", { labels: ["instance"] })] })),
+      },
+      queryAnswers: new Proxy({} as never, { get: () => answer }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1" });
+    expect(await screen.findByRole("heading", { name: "Metrics in s1 name · 2" })).toBeTruthy();
+    const filter = screen.getByRole("textbox", { name: "Filter the list" }) as HTMLInputElement;
+    await user.type(filter, "kube");
+    await waitFor(() => expect(within(screen.getByRole("listbox", { name: "Metrics" })).getAllByRole("option")).toHaveLength(1));
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s3" } });
+    expect(await screen.findByRole("heading", { name: "Metrics in s3 name · 1" })).toBeTruthy();
+    expect(filter.value).toBe("");
+    await waitFor(() => expect(within(screen.getByRole("listbox", { name: "Metrics" })).getAllByRole("option")).toHaveLength(1));
+    expect(within(screen.getByRole("listbox", { name: "Metrics" })).getByText("node_load1")).toBeTruthy();
+    expect(screen.queryByText("Nothing matches that.")).toBeNull();
   });
 
   it("editing by hand shows the detached line", async () => {
@@ -214,7 +423,7 @@ describe("Browse metrics and log streams", () => {
     await openExplore();
     await pickMetric(user, "http_requests_total");
     await screen.findByRole("button", { name: "route" });
-    const line = "You edited the query by hand. Clicking a chip writes it again from the chips.";
+    const line = "You edited the query by hand. A chip now starts a new query from that chip.";
     expect(screen.queryByText(line)).toBeNull();
     fireEvent.change(query(), { target: { value: "up" } });
     expect(screen.getByText(line)).toBeTruthy();
@@ -257,7 +466,7 @@ describe("Browse metrics and log streams", () => {
     const api = loki();
     const user = userEvent.setup();
     await openExplore();
-    expect(await screen.findByRole("heading", { name: "Log streams in prod-east · 4" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Log streams in l1 name · 4" })).toBeTruthy();
     const box = await list();
     expect(box.getAttribute("aria-label")).toBe("Log streams");
     const app = within(box).getByRole("group", { name: "app" });
@@ -274,27 +483,71 @@ describe("Browse metrics and log streams", () => {
     expect(screen.queryByRole("button", { name: "app" })).toBeNull();
   });
 
+  it("an empty stream list names the window it checked", async () => {
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, stream_window_seconds: 604800 })) },
+    }, async () => json([]));
+    await openExplore();
+    expect(await screen.findByText("No log streams in the last 7 days.")).toBeTruthy();
+    expect(windowWords(604800)).toBe("7 days");
+    expect(windowWords(3600)).toBe("1 hour");
+  });
+
+  it("a Loki that failed doesn't claim there are no streams", async () => {
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, state: "error", message: "The source answered HTTP 500.", stream_window_seconds: null })) },
+    }, async () => json([]));
+    await openExplore();
+    expect(await screen.findByText(/The source answered HTTP 500\./)).toBeTruthy();
+    expect(screen.queryByText(/No log streams in the last/)).toBeNull();
+    expect(screen.queryByText("This source lists no log streams yet.")).toBeNull();
+  });
+
+  it("a logs list never shows Prometheus notes", async () => {
+    const note = "Labels per metric come from the first 50000 series.";
+    const loki = "Showing the first 50 log labels.";
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      catalogs: {
+        p1: catalogOf("p1",
+          source("s1", { built_at: BUILT, notes: [note], metrics: [metric("up", { labels: ["job"] })] }),
+          source("l1", { source_type: "loki", built_at: BUILT, notes: [loki], stream_window_seconds: 604800, streams: [stream("app", ["api"])] })),
+      },
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1" });
+    await screen.findByRole("heading", { name: "Log streams in l1 name · 1" });
+    expect(screen.queryByText(note)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "About this list" }));
+    const tip = screen.getByRole("tooltip");
+    expect(tip.textContent).toContain(loki);
+    expect(tip.textContent).not.toContain("50000");
+  });
+
   it("log stream chips keep the chosen stream and read nothing twice", async () => {
     const warned = [vi.spyOn(console, "warn").mockImplementation(() => {}), vi.spyOn(console, "error").mockImplementation(() => {})];
     const api = loki();
     const user = userEvent.setup();
     await openExplore();
     const box = await list();
-    await user.click(within(box).getByRole("option", { name: "app = api" }));
-    // Logs mode charts the volume and lists the lines (Task 14): one read of the lines.
+    await user.click(await within(box).findByRole("option", { name: "app = api" }));
+    // A log query lists its lines and has no chart (Task 8): one read of the lines, no volume.
     const lineReads = () => batches(api).filter((b) => b.queries[0].query === '{app="api"}');
     await waitFor(() => expect(lineReads()).toHaveLength(1));
     const before = batches(api).length;
-    await user.click(await screen.findByRole("button", { name: "level" }));
-    expect(screen.getByRole("button", { name: "level" }).getAttribute("aria-pressed")).toBe("true");
-    // The stream stays chosen and the text is the same: the lines aren't read again; only the
-    // volume chart splits by the label.
+    // With no chart there's nothing to split: only the Only chips are offered.
+    await screen.findByRole("group", { name: "Only" });
+    expect(screen.queryByRole("group", { name: "Split by" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "level" })).toBeNull();
+    // The stream stays chosen and the text is the same: the lines aren't read again.
     expect(query().value).toBe('{app="api"}');
     expect(screen.getByRole("button", { name: "app=api" }).getAttribute("aria-pressed")).toBe("true");
     await new Promise((r) => setTimeout(r, 450));
     expect(lineReads()).toHaveLength(1);
-    expect(batches(api)).toHaveLength(before + 1);
-    expect(batches(api).at(-1)?.queries[0].query).toMatch(/^sum by \(level\) \(count_over_time\(\{app="api"\}\[\d+[smh]\]\)\)$/);
+    expect(batches(api)).toHaveLength(before);
+    expect(batches(api).some((b) => /count_over_time/.test(b.queries[0].query))).toBe(false);
     expect(api.requests.some((r) => r.url.startsWith("/api/monitoring/label-values"))).toBe(false);
     expect(warned.flatMap((w) => w.mock.calls).filter((c) => String(c[0]).includes("Duplicate"))).toEqual([]);
   });
@@ -360,7 +613,7 @@ describe("Browse metrics and log streams", () => {
     }));
     prom(many);
     await openExplore();
-    expect(await screen.findByRole("heading", { name: "Metrics in prod-east · 5000" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Metrics in s1 name · 5000" })).toBeTruthy();
     const box = await list();
     await waitFor(() => expect(within(box).getAllByRole("option").length).toBeGreaterThan(0));
     expect(within(box).getAllByRole("option").length).toBeLessThan(60);

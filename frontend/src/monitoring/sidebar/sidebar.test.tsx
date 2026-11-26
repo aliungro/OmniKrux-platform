@@ -181,6 +181,42 @@ describe("Monitoring sidebar", () => {
     expect(document.activeElement).toBe(screen.getByRole("main"));
   });
 
+  it("find says nothing while it is empty", async () => {
+    installFakeMonitoringApi({
+      projects: Array.from({ length: 10 }, (_, i) => seedProject(`p${i}`, `Shop ${i}`)),
+    });
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Shop 0" });
+    const findArea = find().closest("div")!.parentElement!;
+    // Empty: no live line at all, so nothing is announced.
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    find().focus();
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    // More than eight match: eight are listed and the rest are counted.
+    fireEvent.change(find(), { target: { value: "shop" } });
+    expect(within(screen.getByRole("listbox", { name: "Find results" })).getAllByRole("option")).toHaveLength(8);
+    expect(within(findArea).getByRole("status").textContent).toBe("2 more: keep typing to narrow them down.");
+    // A page is found by name, its line says what it is once.
+    fireEvent.change(find(), { target: { value: "explo" } });
+    const hit = within(screen.getByRole("listbox", { name: "Find results" })).getByRole("option");
+    expect(hit.textContent).toBe("ExplorePage");
+    expect(within(findArea).getByRole("status").textContent).toBe("");
+    fireEvent.change(find(), { target: { value: "zzz" } });
+    expect(within(findArea).getByRole("status").textContent).toBe("Nothing matches “zzz”.");
+    fireEvent.change(find(), { target: { value: "" } });
+    expect(within(findArea).queryByRole("status")).toBeNull();
+    expect(document.activeElement).toBe(find());
+  });
+
+  it("long names in the tree and the New dashboards line carry their full text", async () => {
+    const LONG = "A project whose name is far too long for the sidebar to show whole";
+    installFakeMonitoringApi({ projects: [seedProject("p1", LONG)] });
+    renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }) });
+    const row = await screen.findByRole("treeitem", { name: LONG });
+    expect(row.querySelector(`[title="${LONG}"]`)?.textContent).toBe(LONG);
+    await waitFor(() => expect(document.querySelector("[data-new-dashboard-note]")?.getAttribute("title")).toBe(`New dashboards go to ${LONG}`));
+  });
+
   it("Find subtitles name the cluster, not its id", async () => {
     seedTwo(async (url) => new Response(JSON.stringify(url === "/api/clusters" ? [{ id: "c1", name: "East cluster", provider: "aks" }] : []), {
       status: 200, headers: { "content-type": "application/json" },
@@ -189,7 +225,7 @@ describe("Monitoring sidebar", () => {
     await screen.findByRole("treeitem", { name: "Both" });
     find().focus();
     fireEvent.change(find(), { target: { value: "A" } });
-    await waitFor(() => expect(screen.getByRole("option", { name: /^A/ }).textContent).toContain("Kubernetes · East cluster"));
+    await waitFor(() => expect(screen.getByRole("option", { name: /^AProject/ }).textContent).toContain("Kubernetes · East cluster"));
   });
 
   it("treeRows lays out the sections", () => {
@@ -222,12 +258,13 @@ describe("Monitoring sidebar", () => {
     await screen.findByRole("treeitem", { name: "Overview" });
     expect(rowTexts()).toEqual([
       "section:Groups", "group:Both", "shortcut:A", "shortcut:B", "dashboard:Overview",
-      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "dashboard:Node health",
+      "section:Projects", "project:A", "dashboard:Alpha", "dashboard:Zeta", "subheading:Ready-made", "dashboard:Node health",
       "project:B", "empty:No dashboards yet",
     ]);
     const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
-    expect(within(ready).getByText("ready-made")).toBeTruthy();
-    expect(within(screen.getByRole("treeitem", { name: "Alpha" })).queryByText("ready-made")).toBeNull();
+    expect(ready.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+    expect(screen.getByRole("treeitem", { name: "Alpha" }).querySelector("svg")).toBeNull();
+    expect(within(ready).queryByText("ready-made")).toBeNull();
     // Enter opens the dashboard in this tab; its row is the current page.
     const alpha = screen.getByRole("treeitem", { name: "Alpha" });
     alpha.focus();
@@ -327,5 +364,63 @@ describe("Monitoring sidebar", () => {
     expect(await screen.findByText("Set up a project first.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
     await waitFor(() => expect(app.current().tabs[0].view).toEqual({ page: "import" }));
+  });
+
+  it("ready-made views sit under a Ready-made heading", () => {
+    const out = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [
+        { id: "ready:p1:logs", title: "Logs overview", ready_made: true }, { id: "d1", title: "Mine", ready_made: false },
+      ] }],
+      groups: [], source_count: 0,
+    }, new Set(["project:p1"]));
+    expect(out.filter((r) => r.level === 1).map((r) => [r.kind, r.label])).toEqual([
+      ["dashboard", "Mine"], ["subheading", "Ready-made"], ["dashboard", "Logs overview"],
+    ]);
+    const none = treeRows({
+      projects: [{ id: "p1", name: "A", kind: "custom", cluster_id: null, color: "custom", dashboards: [{ id: "d1", title: "Mine", ready_made: false }] }],
+      groups: [], source_count: 0,
+    }, new Set(["project:p1"]));
+    expect(none.some((r) => r.kind === "subheading")).toBe(false);
+  });
+
+  it("arrow keys skip the Ready-made heading", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A")],
+      dashboards: { "ready:p1:nodes": seedDashboard("ready:p1:nodes", A, spec("Node health", []), true) },
+      readyMade: { p1: [{ key: "nodes", id: "ready:p1:nodes", title: "Node health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["project:p1"]));
+    renderMonitoringApp();
+    const project = await screen.findByRole("treeitem", { name: "A" });
+    await screen.findByRole("treeitem", { name: "Node health, ready-made" });
+    expect(tree().querySelector("[data-row-kind='subheading']")?.getAttribute("role")).toBe("none");
+    project.focus();
+    fireEvent.keyDown(project, { key: "ArrowRight" });
+    const ready = screen.getByRole("treeitem", { name: "Node health, ready-made" });
+    expect(document.activeElement).toBe(ready);
+    fireEvent.keyDown(ready, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(project);
+    fireEvent.keyDown(project, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(ready);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a saved dashboard and a ready-made view with one name are told apart", async () => {
+    const A = { kind: "project" as const, id: "p1", name: "A" };
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "A")],
+      dashboards: {
+        d1: seedDashboard("d1", A, spec("Cluster health", [])),
+        "ready:p1:cluster": seedDashboard("ready:p1:cluster", A, spec("Cluster health", []), true),
+      },
+      readyMade: { p1: [{ key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "", missing: [], notes: [], checked: true, check_message: null }] },
+    });
+    localStorage.setItem("omnikrux.monitoring.sidebar", JSON.stringify(["project:p1"]));
+    renderMonitoringApp();
+    await screen.findByRole("treeitem", { name: "Cluster health, ready-made" });
+    expect(screen.getAllByText("Cluster health")).toHaveLength(2);
+    expect(screen.getByRole("treeitem", { name: "Cluster health" })).toBeTruthy();
+    expect(rowTexts().slice(-3)).toEqual(["dashboard:Cluster health", "subheading:Ready-made", "dashboard:Cluster health"]);
   });
 });

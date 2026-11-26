@@ -33,7 +33,7 @@ const T = "2026-01-01T00:00:00Z";
 const CLUSTER = "kind-omnikrux-dev";
 const TOKEN = "glsa_setup-typed-grafana-token";
 const SIGN_IN = `Grafana · ${CLUSTER} needs a sign-in, and a Grafana reached through its cluster can't take one. Reach it by its address instead, with a service account token.`;
-const FIRST_SOURCE = "Each Grafana data source uses this project's first source of the same type.";
+const FIRST_SOURCE = "Each Grafana data source goes to the first source of its type in this project.";
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 const clusters = [{ id: "c1", name: CLUSTER, provider: "kind", state: "ready" }];
 

@@ -1,13 +1,16 @@
 // The browse list (X2): the metrics of the project's Prometheus-compatible source, or the log
 // streams of its Loki source, as one virtualized listbox. The keyboard stays on the listbox:
 // Up/Down move the highlight, Enter picks, and a letter goes into the filter. A pick writes the
-// query; it never moves the focus.
+// query; it never moves the focus. The heading counts the source shown (its name, not the
+// project's), a long name has its whole self as its title (the help text is its description), and a
+// new source starts with an empty filter.
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { catalogAge, type OwnerStreamLabel } from "../catalog/merge";
 import type { BrowseMetric } from "../catalog/metrics";
 import type { Only } from "../build/writeQuery";
+import HelpTip from "../build/HelpTip";
 import s from "./BrowseList.module.css";
 
 const ROW = 30;
@@ -16,7 +19,9 @@ const FILTER_MS = 150;
 
 export interface BrowseListProps {
   mode: "metrics" | "streams";
-  projectName: string;
+  /** The source the list is about: its name heads the list, and a new one clears the filter. */
+  sourceId: string;
+  sourceName: string;
   metrics: BrowseMetric[];
   streams: OwnerStreamLabel[];
   selectedMetric: string | null;
@@ -26,7 +31,11 @@ export interface BrowseListProps {
   /** The catalog could not be read at all. */
   error: string | null;
   /** Lines about what the sources couldn't list. */
+  problems: string[];
+  /** Technical notes about the list, kept in a help tip (only the list's own source type). */
   notes: string[];
+  /** In logs mode: how far back the streams were read (seconds); null when unknown. */
+  streamWindowSeconds?: number | null;
   builtAt: number | null;
   refreshing: boolean;
   refreshError: string | null;
@@ -39,6 +48,14 @@ type Row =
   | { kind: "metric"; key: string; metric: BrowseMetric }
   | { kind: "head"; key: string; label: string }
   | { kind: "stream"; key: string; label: string; value: string };
+
+/** `604800` → `7 days`, `3600` → `1 hour`. */
+export function windowWords(seconds: number): string {
+  for (const [size, one, many] of [[86400, "day", "days"], [3600, "hour", "hours"], [60, "minute", "minutes"]] as const) {
+    if (seconds >= size && seconds % size === 0) { const n = seconds / size; return `${n} ${n === 1 ? one : many}`; }
+  }
+  return `${seconds} seconds`;
+}
 
 const lower = (t: string) => t.toLocaleLowerCase();
 
@@ -60,7 +77,7 @@ function rowsOf(mode: "metrics" | "streams", metrics: BrowseMetric[], streams: O
 }
 
 export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function BrowseList(props, ref) {
-  const { mode, projectName, metrics, streams, selectedMetric, selectedStreams, loading, error, notes, builtAt, refreshing, refreshError } = props;
+  const { mode, sourceId, sourceName, metrics, streams, selectedMetric, selectedStreams, loading, error, problems, notes, streamWindowSeconds, builtAt, refreshing, refreshError } = props;
   const uid = useId();
   const scroller = useRef<HTMLDivElement>(null);
   const filter = useRef<HTMLInputElement>(null);
@@ -73,6 +90,13 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
     const timer = setTimeout(() => setApplied(text), FILTER_MS);
     return () => clearTimeout(timer);
   }, [text]);
+  // Another source has another list: words typed for the last one would only hide it.
+  const [listFor, setListFor] = useState(sourceId);
+  if (listFor !== sourceId) {
+    setListFor(sourceId);
+    setText("");
+    setApplied("");
+  }
 
   const rows = useMemo(() => rowsOf(mode, metrics, streams, applied), [mode, metrics, streams, applied]);
   const options = useMemo(() => rows.flatMap((r, i) => (r.kind === "head" ? [] : [i])), [rows]);
@@ -146,10 +170,14 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
 
   const noun = mode === "metrics" ? "Metrics" : "Log streams";
   const age = catalogAge(builtAt, Date.now());
-  const none = !loading && !error && rows.length === 0;
+  // A source that failed proved nothing: its own words (the problem lines) stand, not "none".
+  const none = !loading && !error && rows.length === 0 && !(mode === "streams" && !streamWindowSeconds && problems.length > 0 && applied.trim() === "");
   return (
     <div className={s.browse}>
-      <h2 className={s.heading}>{`${noun} in ${projectName} · ${total}`}</h2>
+      <div className={s.headRow}>
+        <h2 className={s.heading}>{`${noun} in ${sourceName} · ${total}`}</h2>
+        {notes.length > 0 && <HelpTip label="About this list">{notes.join(" ")}</HelpTip>}
+      </div>
       <input ref={filter} className={s.filter} type="text" autoComplete="off" spellCheck={false}
         aria-label="Filter the list" placeholder="Filter" value={text}
         onChange={(e) => setText(e.target.value)} onKeyDown={onFilterKey} />
@@ -162,10 +190,10 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
           </button>
         </div>
       )}
-      {notes.map((n) => <p key={n} className={s.line}>{n}</p>)}
+      {problems.map((n) => <p key={n} className={s.line}>{n}</p>)}
       {none && (
         <p className={s.line}>
-          {applied.trim() !== "" ? "Nothing matches that." : mode === "metrics" ? "This source lists no metrics yet." : "This source lists no log streams yet."}
+          {applied.trim() !== "" ? "Nothing matches that." : mode === "metrics" ? "This source lists no metrics yet." : streamWindowSeconds ? `No log streams in the last ${windowWords(streamWindowSeconds)}.` : "This source lists no log streams yet."}
         </p>
       )}
       <div ref={scroller} className={s.list} role="listbox" tabIndex={0} aria-label={noun} aria-keyshortcuts="b"
@@ -182,15 +210,16 @@ export const BrowseList = forwardRef<HTMLDivElement, BrowseListProps>(function B
                   <div key={row.key} id={optionId(i)} role="option" className={s.option} aria-selected={isSelected(row)}
                     aria-posinset={options.indexOf(i) + 1} aria-setsize={options.length}
                     data-active={i === activeRow ? "true" : undefined}
+                    aria-description={row.kind === "metric" ? (row.metric.help ?? undefined) : undefined}
                     onClick={() => { setActive(options.indexOf(i)); pickRow(i); }}>
                     {row.kind === "metric" ? (
                       <>
-                        <span className={s.name} title={row.metric.help ?? undefined}>{row.metric.name}</span>
+                        <span className={s.name} title={row.metric.name}>{row.metric.name}</span>
                         {" "}
                         <span className={s.type}>{row.metric.typeLabel}</span>
                       </>
                     ) : (
-                      <span className={s.name}>{`${row.label} = ${row.value}`}</span>
+                      <span className={s.name} title={`${row.label} = ${row.value}`}>{`${row.label} = ${row.value}`}</span>
                     )}
                   </div>
                 );

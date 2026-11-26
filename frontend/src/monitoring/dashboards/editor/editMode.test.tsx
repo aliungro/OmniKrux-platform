@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
 import { linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
@@ -143,11 +143,11 @@ describe("Edit mode", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Query A" })));
   });
 
-  it("Ctrl+Delete removes the tile and says Discard brings it back", async () => {
+  it("Ctrl+Delete removes the tile and says Ctrl+Z brings it back", async () => {
     const { user } = await editing();
     await user.keyboard("{Control>}{Delete}{/Control}");
     expect(within(panels()).getAllByRole("region")).toHaveLength(1);
-    expect(await screen.findByText('Removed "Requests". Discard brings it back.')).toBeTruthy();
+    expect(await screen.findByText('Removed "Requests". Ctrl+Z brings it back.')).toBeTruthy();
     expect(document.activeElement).toBe(tile("Errors"));
   });
 
@@ -191,8 +191,7 @@ describe("Edit mode", () => {
     const discard = screen.getByRole("button", { name: "Discard" });
     await user.click(discard);
     const dialog = screen.getByRole("alertdialog", { name: 'Discard your changes to "API latency"?' });
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Discard changes" }));
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(document.activeElement).toBe(discard);
@@ -444,11 +443,188 @@ describe("Edit mode", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit" })));
   });
 
-  it("Enter on a tile opens its settings with the keyboard on the Query tab", async () => {
+  it("Enter on a tile opens its settings on the Query tab with the keyboard in its first field", async () => {
     const { user } = await editing();
     await user.keyboard("{Enter}");
-    const query = within(screen.getByRole("complementary", { name: "Panel settings" })).getByRole("tab", { name: "Query" });
-    expect(document.activeElement).toBe(query);
+    const aside = screen.getByRole("complementary", { name: "Panel settings" });
+    const query = within(aside).getByRole("tab", { name: "Query" });
+    expect(document.activeElement).toBe(within(aside).getByRole("textbox", { name: "Query A" }));
     expect(query.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("entering edit mode by e keeps the heading, with the title field inside it, and landings on it still work", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    notBody();
+    // The heading stays (the title field is inside it), so every landing on it still works.
+    expect(screen.getByRole("heading", { level: 1 })).toBe(title);
+    expect(within(title).getByRole("textbox", { name: "Dashboard title" })).toBeTruthy();
+    title.focus();
+    await user.keyboard("t");
+    expect(await screen.findByRole("menu", { name: "Time range" })).toBeTruthy();
+    notBody();
+  });
+
+  it("the panel menu duplicates and removes by mouse", async () => {
+    const { user } = await editing();
+    const more = within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" });
+    expect(more.getAttribute("aria-haspopup")).toBe("menu");
+    await user.click(more);
+    const menu = screen.getByRole("menu", { name: "Panel actions for Requests" });
+    expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Settings", "Duplicate", "Remove"]);
+    await user.click(within(menu).getByRole("menuitem", { name: "Duplicate" }));
+    // Below the original, a new id, and the keyboard on the copy.
+    expect(tile("Requests (copy)").getAttribute("aria-label")).toBe("Requests (copy), 8 by 8, column 1, row 9");
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests (copy)")));
+    expect(await screen.findByText('Duplicated "Requests".')).toBeTruthy();
+    // d on a tile does the same.
+    await user.keyboard("d");
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests (copy) (copy)")));
+    // Remove from the menu: the tile goes, the keyboard goes where Ctrl+Delete sends it.
+    await user.click(within(tile("Errors")).getByRole("button", { name: "Panel actions for Errors" }));
+    await user.click(within(screen.getByRole("menu", { name: "Panel actions for Errors" })).getByRole("menuitem", { name: "Remove" }));
+    expect(within(panels()).getAllByRole("region").map((t) => t.getAttribute("aria-label")?.split(",")[0]))
+      .toEqual(["Requests", "Requests (copy)", "Requests (copy) (copy)"]);
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests")));
+    // Settings opens the panel's settings.
+    await user.click(within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    const side = screen.getByRole("complementary", { name: "Panel settings" });
+    expect(within(side).getByRole("heading", { name: "Requests" })).toBeTruthy();
+    notBody();
+  });
+
+  it("Esc in a tile's menu puts the keyboard back on the tile", async () => {
+    const { user } = await editing();
+    await user.click(within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" }));
+    const menu = screen.getByRole("menu", { name: "Panel actions for Requests" });
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(tile("Requests"));
+    // The tile's keys work at once.
+    await user.keyboard("{ArrowRight}");
+    expect(document.activeElement).toBe(tile("Errors"));
+    notBody();
+  });
+
+  it("Remove panel in the settings keeps the keyboard on a tile", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Enter}");
+    let side = screen.getByRole("complementary", { name: "Panel settings" });
+    // The settings end with Duplicate panel and Remove panel.
+    const buttons = within(side).getAllByRole("button");
+    expect(buttons.slice(-2).map((b) => b.textContent)).toEqual(["Duplicate panel", "Remove panel"]);
+    await user.click(within(side).getByRole("button", { name: "Duplicate panel" }));
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests (copy)")));
+    side = screen.getByRole("complementary", { name: "Panel settings" });
+    await user.click(within(side).getByRole("button", { name: "Remove panel" }));
+    expect(screen.queryByRole("complementary", { name: "Panel settings" })).toBeNull();
+    expect(within(panels()).getAllByRole("region").map((t) => t.getAttribute("aria-label")?.split(",")[0])).toEqual(["Requests (copy)", "Errors"]);
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-tile-id")).toBeTruthy());
+    notBody();
+    expect(await screen.findByText('Removed "Requests". Ctrl+Z brings it back.')).toBeTruthy();
+  });
+
+  it("Ctrl+Z undoes a move", async () => {
+    const { user } = await editing();
+    const undo = screen.getByRole("button", { name: "Undo" });
+    expect(undo.getAttribute("aria-keyshortcuts")).toBe("Control+Z");
+    expect(undo.getAttribute("aria-disabled")).toBe("true");
+    // Before Discard.
+    expect(undo.compareDocumentPosition(screen.getByRole("button", { name: "Discard" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    expect(undo.getAttribute("aria-disabled")).toBeNull();
+    await user.keyboard("{Control>}z{/Control}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(document.activeElement).toBe(tile("Requests"));
+    expect(undo.getAttribute("aria-disabled")).toBe("true");
+    // A held Ctrl+Z undoes once: its repeats do nothing.
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    fireEvent.keyDown(tile("Requests"), { key: "z", ctrlKey: true, repeat: true });
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    await user.keyboard("{Control>}z{/Control}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    // Nothing left to undo: nothing changes, and the keyboard stays.
+    await user.keyboard("{Control>}z{/Control}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(document.activeElement).toBe(tile("Requests"));
+    // Undoing a duplicate takes away the tile that had the keyboard: it goes to another tile.
+    await user.keyboard("d");
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests (copy)")));
+    await user.keyboard("{Control>}z{/Control}");
+    expect(within(panels()).getAllByRole("region")).toHaveLength(2);
+    await waitFor(() => expect(document.activeElement?.getAttribute("data-tile-id")).toBeTruthy());
+    notBody();
+    // The Undo button does the same, and keeps the keyboard.
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 2, row 1");
+    await user.click(undo);
+    expect(tile("Requests").getAttribute("aria-label")).toBe("Requests, 8 by 8, column 1, row 1");
+    expect(document.activeElement).toBe(undo);
+  });
+
+  it("a removed panel says so on screen with Undo", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Control>}{Delete}{/Control}");
+    const note = () => screen.queryByText('Removed "Requests".')?.closest('[role="status"]') ?? null;
+    expect(note()).not.toBeNull();
+    // Seen, not spoken twice: the grid's live region says it once.
+    expect(note()?.getAttribute("aria-live")).toBe("off");
+    expect(screen.getAllByText(/^Removed "Requests"/).map((x) => x.textContent)).toEqual(['Removed "Requests".', 'Removed "Requests". Ctrl+Z brings it back.']);
+    await user.click(within(note() as HTMLElement).getByRole("button", { name: "Undo" }));
+    expect(tile("Requests")).toBeTruthy();
+    expect(note()).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(tile("Requests")));
+    // The next edit takes the note away.
+    await user.keyboard("{Control>}{Delete}{/Control}");
+    expect(note()).not.toBeNull();
+    expect(document.activeElement).toBe(tile("Errors"));
+    await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+    expect(note()).toBeNull();
+    notBody();
+    // So do ten seconds.
+    await user.keyboard("{Control>}z{/Control}{Control>}z{/Control}");
+    expect(tile("Requests")).toBeTruthy();
+    notBody();
+    tile("Requests").focus();
+    vi.useFakeTimers();
+    try {
+      fireEvent.keyDown(document.activeElement!, { key: "Delete", ctrlKey: true });
+      expect(note()).not.toBeNull();
+      act(() => { vi.advanceTimersByTime(9_900); });
+      expect(note()).not.toBeNull();
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(note()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    notBody();
+  });
+
+  it("Ctrl+Z in a text field is the field's own undo", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Control>}{Delete}{/Control}");
+    expect(within(panels()).getAllByRole("region")).toHaveLength(1);
+    const field = screen.getByRole("textbox", { name: "Dashboard title" });
+    await user.click(field);
+    // Not taken by the page: the field (the browser) undoes its own typing.
+    expect(fireEvent.keyDown(field, { key: "z", ctrlKey: true })).toBe(true);
+    expect(within(panels()).getAllByRole("region")).toHaveLength(1);
+    // A query field too.
+    await user.keyboard("{Escape}");
+    within(panels()).getAllByRole("region")[0].focus();
+    await user.keyboard("{Enter}");
+    await user.click(within(screen.getByRole("complementary", { name: "Panel settings" })).getByRole("tab", { name: "Query" }));
+    const query = await screen.findByRole("textbox", { name: "Query A" });
+    expect(fireEvent.keyDown(query, { key: "z", ctrlKey: true })).toBe(true);
+    expect(within(panels()).getAllByRole("region")).toHaveLength(1);
+    notBody();
   });
 });

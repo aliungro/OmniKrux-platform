@@ -23,7 +23,7 @@ NONE_NAMED = (
     "This source holds several clusters, and none is named {cluster}. Set the filter yourself."
 )
 CANT_TELL = "OmniKrux couldn't tell whether a filter is needed."
-CANT_CHECK = "Couldn't check the source: {message}"
+CANT_CHECK = "Couldn't check the source: {message}"  # for words that do not name the source
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,11 @@ async def suggest_filter(
     )
     for answer in values:
         if isinstance(answer, SourceUnreachable | QueryRejected):
-            return Suggestion((), "none", CANT_CHECK.format(message=answer.message))
+            # Words that already name the source need no prefix; the tool's own text does.
+            named = source.name in answer.message
+            return Suggestion(
+                (), "none", answer.message if named else CANT_CHECK.format(message=answer.message)
+            )
         if isinstance(answer, BaseException):
             raise answer
 

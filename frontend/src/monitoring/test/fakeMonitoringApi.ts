@@ -5,15 +5,16 @@
 import { vi } from "vitest";
 import type {
   AuthOut, DashboardRefOut, DiscoveryOut, FieldCatalogOut, GroupOut, HealthOut, LinkOut, ProjectKind, ProjectOut,
-  QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
+  FilterCheckOut, QueryErrorCode, QueryRequest, QueryResponse, SetupIn, SourceIn, SourceOut, SuggestOut, TreeColor, TreeDashboard, TreeOut,
 } from "../api/types";
 import type { CatalogOut } from "../catalog/api";
-import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut } from "../dashboards/api";
+import type { BatchItemOut, DashboardOut, ReadyMadeOut, VersionOut, WhyEmptyOut } from "../dashboards/api";
 import { emptyTransferState, transferRoute, type FakeTransferState } from "./fakeTransferApi";
 import { alertsRoute, emptyAlertsState, type FakeAlertsState, type FakeRefusal } from "./fakeAlertsApi";
+import { splitMatchers } from "../alerts/silences/when";
 import type { Plan } from "../../api/types";
 import type { ContactsSyncOut, GeneratedOut, InstallPlanOut, InstallStatusOut, ProbeResultOut, ToolsOut } from "../install/api";
-import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem } from "../dashboards/schema";
+import { validateDashboard, type DashboardSpec, type OwnerKind, type Problem, type VariableSpec } from "../dashboards/schema";
 import { autoTypeName } from "../sources/sourceLabels";
 
 /** A seeded answer to a query: a success (whatever is left out is filled in) or a refusal. */
@@ -65,6 +66,8 @@ export interface FakeMonitoringState extends FakeAlertsState {
   health: Record<string, HealthOut>;
   /** By cluster id. */
   discovery: Record<string, DiscoveryOut>;
+  /** `POST /sources/{id}/filter-check` answers by source id, then by filter text (first wins); whatever is left out matches. */
+  filterChecks: Record<string, FilterCheckOut>;
   /** Field catalogs by source id. */
   fields: Record<string, FieldCatalogOut>;
   /** Answers to `/query`, by query text; whatever is left out is filled in. */
@@ -75,13 +78,19 @@ export interface FakeMonitoringState extends FakeAlertsState {
   queryAnswers: Record<string, FakeQueryAnswer>;
   /** By id. */
   dashboards: Record<string, FakeDashboard>;
-  /** Ready-made views by project id (also listed in the tree). */
-  readyMade: Record<string, ReadyMadeOut[]>;
+  /** Ready-made views by project id (also listed in the tree); `source_name` left out answers null. */
+  readyMade: Record<string, FakeReadyMade[]>;
   /** Label values by `"<project id>|<label>"`. */
   labelValues: Record<string, string[]>;
   /** Project catalogs by project id (`GET /projects/{id}/catalog`; absent answers 404). */
   catalogs: Record<string, CatalogOut>;
+  /** `POST /query/why-empty`'s answer to every check (after the body, project and link checks);
+   * `unknown` by default, so an empty panel keeps the generic words. */
+  whyEmpty: WhyEmptyOut | { error: { code: QueryErrorCode; message: string }; status: number };
 }
+
+/** A ready-made view as a test seeds it: `source_name` may be left out. */
+export type FakeReadyMade = Omit<ReadyMadeOut, "source_name"> & { source_name?: string | null };
 
 /** A seed: any part of the state; `install` may be seeded in part (the rest keeps its defaults). */
 export type FakeMonitoringSeed = Partial<Omit<FakeMonitoringState, "install" | "transfer">> & {
@@ -117,6 +126,8 @@ const NO_ANSWER = "This fake has no answer for that query.";
 const OWNER_KIND_CHOICE = 'Choose "project" or "group" as the owner kind.';
 const QUERY_PROJECT_GONE = "That project no longer exists.";
 const QUERY_NOT_LINKED = "This source isn't linked to that project.";
+const WHY_PROJECT = "Choose the project the query ran for.";
+const WINDOW_ORDER = "Send the time range the query ran over: a start, and an end after it.";
 const RANGE_NEEDS = "A range query needs a start, an end after it, and a step.";
 const TOO_MANY_POINTS = "This range has too many points for the step. Use a larger step.";
 const MAX_TITLE = 120;
@@ -162,9 +173,10 @@ function color(kind: ProjectKind, provider: string | null): TreeColor {
 
 export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback?: Fallback): FakeMonitoringApi {
   const state: FakeMonitoringState = {
-    sources: [], projects: [], groups: [], health: {}, discovery: {}, fields: {}, queries: {},
+    sources: [], projects: [], groups: [], health: {}, discovery: {}, filterChecks: {}, fields: {}, queries: {},
     suggestion: { filter: "", origin: "none", reason: null },
     queryAnswers: {}, dashboards: {}, readyMade: {}, labelValues: {}, catalogs: {},
+    whyEmpty: { reason: "unknown", message: null },
     ...emptyAlertsState(),
     ...seed,
     install: { ...emptyInstallState(), ...seed.install },
@@ -188,6 +200,9 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       ...(lists.cluster_rules?.length ? { cluster_rules: lists.cluster_rules } : {}),
     };
   };
+  /** A project's OmniKrux silences: those with the equality matcher `project="{name}"`. */
+  const silencesOf = (name: string) =>
+    state.silences.filter((x) => x.where.kind === "omnikrux" && splitMatchers(x.matchers).includes(`project=${JSON.stringify(name)}`));
   const usedBy = (sourceId: string) => state.projects.filter((p) => p.links.some((l) => l.source_id === sourceId)).map((p) => ({ id: p.id, name: p.name }));
   const refreshUsedBy = () => state.sources.forEach((s) => { s.used_by = usedBy(s.id); });
   const groupOut = (g: GroupOut): GroupOut => ({ ...g, project_ids: byName(g.project_ids) });
@@ -356,7 +371,14 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       // A ready-made view isn't "a copy": it keeps its own title.
       const base = from.out.ready_made ? from.out.title : `${from.out.title} (copy)`;
       const title = typeof body.title === "string" ? body.title : uniqueTitle(owner.kind, owner.id, base);
-      const spec = checked({ ...adapted(from.out.spec, owner), title }, owner);
+      const copied = adapted(from.out.spec, owner);
+      // The copy's variables start at the given values, each only when the variable can take it.
+      const given = (body.defaults ?? {}) as Record<string, "all" | string[]>;
+      for (const v of copied.variables) {
+        const value = given[v.name];
+        if (value === "all" ? v.includeAll : Array.isArray(value) && value.length <= (v.multi ? 100 : 1)) v.default = value as VariableSpec["default"];
+      }
+      const spec = checked({ ...copied, title }, owner);
       return spec instanceof Response ? spec : addDashboard(owner, spec, "copied", from.out.title);
     }
     const d = state.dashboards[id];
@@ -464,7 +486,9 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       return alertsRoute({ state, nextId, project, group: (id) => state.groups.find((g) => g.id === id) }, method, seg.slice(1), query, body, found);
     }
     if (is("GET", "projects", null, "ready-made")) {
-      return project(b) ? json(state.readyMade[b] ?? []) : dashboardError(404, "not_found", DASHBOARD_GONE);
+      return project(b)
+        ? json((state.readyMade[b] ?? []).map((r): ReadyMadeOut => ({ source_name: null, ...r })))
+        : dashboardError(404, "not_found", DASHBOARD_GONE);
     }
     if (is("GET", "projects", null, "catalog")) {
       const found = state.catalogs[b];
@@ -482,6 +506,17 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           : { ok: false, response: null, error: { ...got.error, status: got.status } };
       });
       return json({ results });
+    }
+    if (is("POST", "query", "why-empty")) {
+      const { source_id: sourceId, project_id: projectId, query: text, start, end } = body as Obj;
+      if (typeof sourceId !== "string" || !sourceId) return queryError(422, "bad_request", "Choose a source to query.");
+      if (typeof projectId !== "string" || !projectId) return queryError(422, "bad_request", WHY_PROJECT);
+      if (typeof text !== "string" || !text) return queryError(422, "bad_request", "Write a query.");
+      if (typeof start !== "number" || typeof end !== "number" || !(end > start)) return queryError(422, "bad_request", WINDOW_ORDER);
+      const refused = linkRefusal(projectId, sourceId);
+      if (refused) return queryError(refused.status, refused.error.code, refused.error.message);
+      const out = state.whyEmpty;
+      return "error" in out ? queryError(out.status, out.error.code, out.error.message) : json(out);
     }
     if (is("GET", "label-values")) {
       if (!query.get("source_id")) return queryError(400, "bad_request", "Choose a source to query.");
@@ -518,6 +553,10 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
       if (is("GET", "sources", b, "fields")) {
         if (!project(query.get("project") ?? "")) return refuse(NOT_LINKED, 404);
         return json(state.fields[b] ?? { metrics: [], labels: [], truncated: false });
+      }
+      if (is("POST", "sources", b, "filter-check")) {
+        const text = String((body as Obj).filter ?? "").trim();
+        return json(state.filterChecks[`${b}|${text}`] ?? state.filterChecks[b] ?? { matches: true, message: null });
       }
       if (is("GET", "sources", b, "alerting")) return json({ omnikrux_engine: true, tool_engine: null, reason: null });
       if (is("GET", "sources", b, "delete-review")) return json({ source_id: b, name: source.name, projects: usedBy(b), token: TOKEN });
@@ -568,6 +607,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           source_id: source.id, source_name: source.name, source_type: source.type,
           filter: String((body as Obj).filter ?? ""), filter_origin: ((body as Obj).origin as LinkOut["filter_origin"]) ?? "user",
           created_by_project: source.created_by_project_id === p.id,
+          source_cluster_id: source.reach === "cluster" ? source.cluster_id : null,
         };
         p.links = [...p.links.filter((l) => l.source_id !== source.id), link];
         refreshUsedBy();
@@ -601,6 +641,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
           dashboards: refsOf("project", p.id),
           token: TOKEN,
           ...ownerRuleLists(p.id),
+          ...(silencesOf(p.name).length ? { silences: silencesOf(p.name).map((x) => ({ id: x.id, matchers: x.matchers })) } : {}),
           // The tools OmniKrux installed in the project's cluster stay (from the seeded status).
           ...(() => {
             const st = p.cluster_id ? state.install.status[p.cluster_id] : undefined;
@@ -612,6 +653,8 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
         if (query.get("token") !== TOKEN) return refuse(REVIEW_CHANGED, 409);
         const { removed } = split();
         state.sources = state.sources.filter((s) => !removed.includes(s));
+        const gone = new Set(silencesOf(p.name));
+        state.silences = state.silences.filter((x) => !gone.has(x));
         state.projects = state.projects.filter((x) => x.id !== b);
         dropOwned("project", b);
         state.groups.forEach((g) => { g.project_ids = g.project_ids.filter((id) => id !== b); });
@@ -642,6 +685,7 @@ export function installFakeMonitoringApi(seed: FakeMonitoringSeed = {}, fallback
         links.push({
           source_id: source.id, source_name: source.name, source_type: source.type, filter: entry.filter ?? "",
           filter_origin: entry.origin ?? "user", created_by_project: source.created_by_project_id === id,
+          source_cluster_id: source.reach === "cluster" ? source.cluster_id : null,
         });
       }
       const cluster = input.cluster_id ? { id: input.cluster_id, name: input.cluster_id } : null;

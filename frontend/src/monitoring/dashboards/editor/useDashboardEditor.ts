@@ -49,6 +49,8 @@ export interface DashboardEditor {
    * takes the keyboard to Threshold); `seq` rises with each refused save. Null once fixed.
    */
   alertRefused: { panelId: string; seq: number } | null;
+  /** Rises with each save refused for JSON text that doesn't apply (0: none yet). */
+  jsonRefusals: number;
 }
 
 const sessionFor = (tabId: string, dashboardId: string): EditorState => {
@@ -78,6 +80,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
   const [conflict, setConflict] = useState<number | null>(null);
   /** Save was pressed while the JSON text didn't apply; the notice lasts while it still doesn't. */
   const [jsonRefused, setJsonRefused] = useState(false);
+  const [jsonRefusals, setJsonRefusals] = useState(0);
   /** Save was pressed while an alert threshold wasn't a number: how many times (0: not refused). */
   const [alertRefusals, setAlertRefusals] = useState(0);
   const [lastSaved, setLastSaved] = useState<DashboardOut | null>(null);
@@ -123,6 +126,7 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
       setSaveError(null);
       setConflict(null);
       setJsonRefused(true);
+      setJsonRefusals((n) => n + 1);
       return;
     }
     // A threshold typed that isn't a number: saving would write the last number it had, not what
@@ -223,6 +227,6 @@ export function useDashboardEditor(dashboardId: string, tabId: string, options: 
 
   return {
     state, dispatch, save, saveOver, discard, restore, saving: mutation.isPending, saveError: jsonError ?? alertError ?? saveError, conflict,
-    draftsWork: keeper.works, lastSaved, alertRefused,
+    draftsWork: keeper.works, lastSaved, alertRefused, jsonRefusals,
   };
 }

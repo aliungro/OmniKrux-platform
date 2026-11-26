@@ -7057,5 +7057,128 @@
         "message": "Use a label name: letters, digits and _, not starting with a digit."
       }
     ]
+  },
+  {
+    "name": "timeseries style bars is valid",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "style": "bars"
+          }
+        }
+      ]
+    },
+    "normalized": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "description": "",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "refresh": null,
+      "variables": [],
+      "panels": [
+        {
+          "id": "a",
+          "type": "timeseries",
+          "title": "",
+          "description": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up",
+              "legend": "",
+              "hidden": false
+            }
+          ],
+          "options": {
+            "unit": "none",
+            "decimals": null,
+            "thresholds": [],
+            "min": null,
+            "max": null,
+            "legend": "bottom",
+            "style": "bars"
+          },
+          "alert": null
+        }
+      ]
+    },
+    "problems": []
+  },
+  {
+    "name": "timeseries style columns is refused",
+    "owner": "project",
+    "input": {
+      "schemaVersion": 1,
+      "title": "Doc",
+      "panels": [
+        {
+          "id": "a",
+          "type": "timeseries",
+          "title": "",
+          "layout": {
+            "x": 0,
+            "y": 0,
+            "w": 6,
+            "h": 4
+          },
+          "queries": [
+            {
+              "ref": "A",
+              "source": {
+                "type": "prometheus",
+                "id": null
+              },
+              "expr": "up"
+            }
+          ],
+          "options": {
+            "style": "columns"
+          }
+        }
+      ]
+    },
+    "normalized": null,
+    "problems": [
+      {
+        "path": "panels[0].options.style",
+        "message": "Use one of: lines, area, stacked, bars."
+      }
+    ]
   }
 ]

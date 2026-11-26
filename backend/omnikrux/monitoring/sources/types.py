@@ -76,6 +76,7 @@ class SourceCheck:
     message: str | None
     version: str | None
     checked_at: datetime
+    answered: bool = False
 
 
 @dataclass(frozen=True)

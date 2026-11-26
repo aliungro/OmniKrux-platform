@@ -7,7 +7,7 @@ OmniKrux ships as one Docker image. Each app is versioned on its own, with a git
 | App | Tag pattern | Current |
 | --- | --- | --- |
 | Kubernetes | `kubernetes-v<version>` | `kubernetes-v0.1.0-alpha.1` |
-| Monitoring | `monitoring-v<version>` | `monitoring-v0.1.0-alpha.1` |
+| Monitoring | `monitoring-v<version>` | `monitoring-v0.1.0-alpha.1`; `monitoring-v0.1.0-alpha.2` to be tagged when the merge is approved |
 
 A tag marks the commit that is that app's release. The matching image is tagged the same way, for example `omnikrux:kubernetes-v0.1.0-alpha.1`. A change to one app does not move another app's tag. The version fields inside `backend/pyproject.toml` (`0.1.0`) and `frontend/package.json` (`0.0.0`) are not what the release is called; the git tag is.
 
@@ -54,4 +54,4 @@ The remote `origin` is the private repository `aliungro/omnikrux-platform` (`htt
 
 ## Merging into main
 
-Merges into `main` are the owner's decision. Work happens on branches (and git worktrees under `.superpowers/worktrees/`); open or push the branch, say what it contains, and leave the merge to the owner. Do not tag from a branch that has not been merged unless the owner asks for it.
+Merges into `main` are the owner's decision. Work happens on branches (and in separate git worktrees); open or push the branch, say what it contains, and leave the merge to the owner. Do not tag from a branch that has not been merged unless the owner asks for it.

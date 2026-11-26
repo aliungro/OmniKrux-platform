@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnikrux.monitoring.models import SilenceRow, lock_first, now, utc
@@ -60,6 +60,10 @@ MAX_UNBOUNDED = 2
 
 class UnknownSilence(KeyError):
     pass
+
+
+class SilenceStillActive(Exception):
+    """Only a silence that has ended can be removed; an active or pending one is expired first."""
 
 
 class SilenceInvalid(ValueError):
@@ -247,6 +251,37 @@ def _check(matchers: Sequence[Matcher], starts_at: datetime, ends_at: datetime) 
         raise SilenceInvalid(ENDS_BEFORE_START)
 
 
+# An ended silence is still listed (and goes with its project) for this long.
+SHOWN_ENDED = timedelta(days=1)
+
+
+def of_project(silence: Silence, project_name: str) -> bool:
+    """Whether the silence is one of the project's: it has the equality matcher
+    `project="{name}"`, as a silence started from the project's rule writes it."""
+    return any(
+        m.label == "project" and m.op == "=" and m.value == project_name for m in silence.matchers
+    )
+
+
+async def project_silences(
+    session: AsyncSession, project_name: str, moment: datetime
+) -> list[Silence]:
+    """The project's OmniKrux silences that are listed (not ended, or ended within a day), by
+    start."""
+    since = _aware(moment) - SHOWN_ENDED
+    found = [_record(row) for row in await session.scalars(select(SilenceRow))]
+    return sorted(
+        (s for s in found if s.ended_at >= since and of_project(s, project_name)),
+        key=lambda s: (s.starts_at, s.created_at, s.id),
+    )
+
+
+async def delete_silences(session: AsyncSession, ids: Sequence[str]) -> None:
+    """Delete these silences, in the caller's transaction."""
+    if ids:
+        await session.execute(delete(SilenceRow).where(SilenceRow.id.in_(list(ids))))
+
+
 class SilenceStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         self._sessionmaker = sessionmaker
@@ -307,6 +342,21 @@ class SilenceStore:
             session.add(row)
             await session.flush()
             return _record(row)
+
+    async def remove_ended(self, id: str, at: datetime) -> Silence:
+        """Delete a silence that has ended by `at` (it no longer mutes anything). UnknownSilence;
+        SilenceStillActive (nothing changed) for one that is active or still to start."""
+        moment = _aware(at)
+        async with self._sessionmaker.begin() as session:
+            await lock_first(session)
+            row = await session.get(SilenceRow, id)
+            if row is None:
+                raise UnknownSilence(id)
+            record = _record(row)
+            if record.ended_at > moment:
+                raise SilenceStillActive(id)
+            await session.delete(row)
+            return record
 
     async def expire(self, id: str, at: datetime) -> Silence:
         """End the silence at `at` (one not started yet ends before it starts). A silence that
@@ -437,11 +487,15 @@ class AlertmanagerFailed(Exception):
     status a route answers with (422 a refusal, 404 gone, 502 not reached or a fault there);
     `unknown` when the change may have been made anyway."""
 
-    def __init__(self, message: str, status: int = 502, *, unknown: bool = False) -> None:
+    def __init__(
+        self, message: str, status: int = 502, *, unknown: bool = False, unreachable: bool = False
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
         self.unknown = unknown
+        # No answer came back at all (it couldn't be reached, or didn't answer in time).
+        self.unreachable = unreachable
 
 
 @dataclass(frozen=True)
@@ -549,7 +603,7 @@ class AlertmanagerSilences:
             return await self._transport.request(method, path, timeout=AM_SECONDS, **kwargs)
         except SourceUnreachable as exc:
             unknown = exc.code in ("timeout", "unreachable")
-            raise AlertmanagerFailed(exc.message, unknown=unknown) from None
+            raise AlertmanagerFailed(exc.message, unknown=unknown, unreachable=unknown) from None
 
     def _failed(self, got: TransportResponse) -> AlertmanagerFailed:
         if got.status in (400, 422):

@@ -31,7 +31,7 @@ const ok = { result_type: "matrix" as const, series: [{ labels: { job: "api" }, 
 
 const READY: ReadyMadeOut = {
   key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "Nodes, pods and their resources.",
-  missing: [], notes: [], checked: true, check_message: null,
+  missing: [], notes: [], checked: true, check_message: null, source_name: null,
 };
 
 function shop(extra: Parameters<typeof installFakeMonitoringApi>[0] = {}): FakeMonitoringApi {
@@ -258,7 +258,7 @@ describe("Copy and delete", () => {
     let dialog = await screen.findByRole("alertdialog", { name: 'Delete dashboard "API latency"?' });
     expect(await within(dialog).findByText("Its 2 saved versions go with it.")).toBeTruthy();
     expect(within(dialog).getByText("Your unsaved draft in this browser goes too.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete dashboard" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(more);
@@ -385,5 +385,32 @@ describe("Copy and delete with panel alerts", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Copy dashboard…" }));
     const copy = await screen.findByRole("dialog", { name: "Copy dashboard" });
     expect(within(copy).queryByText(/Alerts aren't copied/)).toBeNull();
+  });
+});
+
+describe("Copy dashboard titles", () => {
+  it("a too-long copy title is said at the field", async () => {
+    const long = "x".repeat(120);
+    shop({ dashboards: { api: seedDashboard("api", SHOP, spec(long, [panel("p-1", "Requests", "up")])) } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "api" }) });
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy dashboard…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Copy dashboard" });
+    const title = within(dialog).getByLabelText("Title") as HTMLInputElement;
+    // The offered title is cut so that "(copy)" still fits.
+    expect(title.value).toBe(`${"x".repeat(113)} (copy)`);
+    // One the server refuses (pasted past the limit) is said under the field, without "title:".
+    fireEvent.change(title, { target: { value: "y".repeat(130) } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create copy" }));
+    const said = await within(dialog).findByText("Use 1 to 120 characters, without line breaks.");
+    expect(said.id).toBeTruthy();
+    expect(within(dialog).queryByText(/^title:/)).toBeNull();
+    expect(title.getAttribute("aria-invalid")).toBe("true");
+    expect(title.getAttribute("aria-describedby")).toBe(said.id);
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    // Typing again takes it away.
+    fireEvent.change(title, { target: { value: "Fits" } });
+    expect(within(dialog).queryByText("Use 1 to 120 characters, without line breaks.")).toBeNull();
   });
 });

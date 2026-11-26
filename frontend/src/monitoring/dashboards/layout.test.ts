@@ -4,6 +4,7 @@ import {
   compact,
   freeSpot,
   grow,
+  MIN_HEIGHTS,
   neighbour,
   nudge,
   overlaps,
@@ -183,5 +184,28 @@ describe("layout", () => {
     expect(wild.panels[1].layout).toMatchObject({ w: 24, h: 2 });
     const edge = appendPanel(spec, { ...rest, layout: { x: 20, y: -4, w: 12, h: 3 } } as never);
     expect(edge.panels[1].layout).toEqual({ x: 12, y: 0, w: 12, h: 3 });
+  });
+
+  it("a panel can't be made shorter than its type's minimum", () => {
+    expect(MIN_HEIGHTS).toEqual({ timeseries: 4, bar: 4, logs: 4, table: 3, gauge: 3, stat: 2 });
+    const typed = (id: string, type: PanelSpec["type"], h: number, y = 0) => ({ ...P(id, 0, y, 12, h), type }) as PanelSpec;
+    // Placing (a move or the corner resize) and the keyboard's shrink stop at the minimum.
+    for (const [type, min] of Object.entries(MIN_HEIGHTS) as [PanelSpec["type"], number][]) {
+      const ps = [typed("a", type, min)];
+      expect(at(placePanel(ps, "a", { x: 0, y: 0, w: 12, h: 1 }), "a").h).toBe(min);
+      expect(grow(ps, "a", "up")).toBe(ps);
+      expect(at(grow([typed("a", type, min + 1)], "a", "up"), "a").h).toBe(min);
+    }
+    // A new panel too.
+    const spec = { panels: [] } as unknown as DashboardSpec;
+    const { layout: _layout, ...rest } = typed("n", "timeseries", 1);
+    expect(appendPanel(spec, { ...rest, layout: { w: 6, h: 1 } } as never).panels[0].layout.h).toBe(4);
+    expect(appendPanel(spec, { ...rest, type: "table", layout: { w: 6, h: 2 } } as never).panels[0].layout.h).toBe(3);
+    // A stored short panel keeps its height until it is moved or resized itself.
+    const stored = [typed("short", "timeseries", 2), typed("b", "stat", 4, 2)];
+    const other = placePanel(stored, "b", { x: 12, y: 0, w: 12, h: 4 });
+    expect(at(other, "short").h).toBe(2);
+    expect(grow(stored, "short", "up")).toBe(stored);
+    expect(at(nudge(stored, "short", "right"), "short").h).toBe(4);
   });
 });

@@ -15,7 +15,7 @@ from omnikrux.monitoring.sources.connector import (
     SourceCatalog,
     TestResult,
     json_object,
-    status_message,
+    probe_failure,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
 
@@ -36,7 +36,7 @@ class AlertmanagerConnector:
         except SourceUnreachable as exc:
             return TestResult(False, None, exc.message)
         if got.status != 200:
-            return TestResult(False, None, status_message(name, got.status))
+            return probe_failure(name, got.status, "an Alertmanager")
         data = json_object(got.body)
         info = data.get("versionInfo") if data is not None else None
         if not isinstance(info, dict) or not isinstance(info.get("version"), str):

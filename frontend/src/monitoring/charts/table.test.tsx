@@ -91,3 +91,14 @@ describe("table panel", () => {
     expect(screen.getByRole("columnheader", { name: /Value/ }).getAttribute("aria-sort")).toBe("descending");
   });
 });
+
+describe("table headers and cells", () => {
+  it("table headers are words, and cut cells show the full value", () => {
+    const long = "a-very-long-pod-name-that-the-cell-has-to-cut-0123456789";
+    const s = [series("a", [5], { labels: { pod_name: long, namespace: "demo" } })];
+    render(<ChartView panel={panelOf("table", { unit: "none" }, { queries: [query("A")] })} data={dataOf(s)} range={RANGE} animate={false} changeId={0} />);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent?.trim())).toEqual(["Pod name", "Namespace", "Value"]);
+    expect(screen.getByText(long).getAttribute("title")).toBe(long);
+    expect(screen.getByText("5").getAttribute("title")).toBe("5");
+  });
+});

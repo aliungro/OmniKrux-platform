@@ -34,8 +34,9 @@ const MARK_ORDER: ChartMark["tone"][] = ["info", "warn", "error"];
 const MARK_W = 2;
 const MARK_H = 6;
 const MARK_ALPHA = 0.85;
-/** The firing side of an alert band: rose, barely there, so the series stay readable over it. */
-const BAND_ALPHA = 0.07;
+/** The firing side of an alert band: rose, barely there (lighter than a filled area), so the series
+ * stay readable over it even when it covers the whole plot. */
+const BAND_ALPHA = 0.04;
 const BAND_LINE = 1.2;
 
 export interface FrameSize {
@@ -55,6 +56,19 @@ export interface FrameSeries {
   ys: Float32Array;
   /** Stacked only: the y of the band's lower edge. */
   base?: Float32Array;
+}
+
+/** One bar of the `bars` style: a sample's value as a block from `y0` to `y1` (pixels from the plot's top). */
+export interface FrameBar {
+  /** The series' key. */
+  key: string;
+  /** A Territories token name. */
+  color: string;
+  /** The bar's left edge and width in pixels from the plot's left. */
+  x: number;
+  w: number;
+  y0: number;
+  y1: number;
 }
 
 export interface FrameThreshold {
@@ -89,11 +103,23 @@ export interface TimeSeriesFrame {
   alert: FrameAlert | null;
   /** Y of the zero line (or the nearest edge): where a filled area starts. */
   baseline: number;
+  /** The `bars` style only: one block per sample and series, stacked from the baseline. */
+  bars?: FrameBar[];
+  /** The visible series drawn at full strength over the others (dimmed to `HIGHLIGHT_DIM`), or null. */
+  highlight: string | null;
+  /** False on a short plot: no axis labels, and the plot takes the whole box but a small margin. */
+  labels: boolean;
 }
 
 const TOP = 8;
 const RIGHT = 14;
 const BOTTOM = 22;
+/** A plot shorter than this (with room for its labels) draws none: they would cover the lines. */
+export const SHORT_PLOT = 48;
+/** The margin round a plot with no labels, so a line at the edge isn't cut in half. */
+const BARE = 3;
+/** Whether a canvas this tall leaves a plot of at least `SHORT_PLOT` once its labels have room. */
+export const roomForLabels = (height: number) => height - TOP - BOTTOM >= SHORT_PLOT;
 const CHAR_W = 6.6; // Geist Mono at 11px
 export const FONT = '11px "Geist Mono", ui-monospace, monospace';
 const BREAK_AFTER = 3; // a hole wider than this many steps is a gap, not a slope
@@ -169,6 +195,8 @@ export function buildFrame(
   range: { start: number; end: number },
   hidden: ReadonlySet<string>,
   alert: AlertBand | null = null,
+  step?: number,
+  highlight: string | null = null,
 ): TimeSeriesFrame {
   // An alert's threshold is always on the chart: the y range (explicit bounds too) grows to hold it.
   const limit = alert && Number.isFinite(alert.threshold) ? alert.threshold : null;
@@ -178,10 +206,15 @@ export function buildFrame(
   const colors = seriesColors(series);
   const filled = opts.style !== "lines";
   const stacked = opts.style === "stacked";
-  const plotH = Math.max(1, size.height - TOP - BOTTOM);
+  const barStyle = opts.style === "bars";
+  // A short plot gives its label room back to the lines (the panel's text alternative still says it all).
+  const labels = roomForLabels(size.height);
+  const top = labels ? TOP : BARE;
+  const right = labels ? RIGHT : BARE;
+  const plotH = Math.max(1, labels ? size.height - TOP - BOTTOM : size.height - 2 * BARE);
 
   /** The y domain, its ticks and labels for a data extent. */
-  const domainFor = (extMin: number, extMax: number) => {
+  const domainFor = (extMin: number, extMax: number, wholeData = false) => {
     if (extMin === Infinity) {
       extMin = limit ?? 0;
       extMax = limit === null ? 1 : limit + Math.max(1, Math.abs(limit));
@@ -193,23 +226,47 @@ export function buildFrame(
     if (filled && minOpt === null) extMin = Math.min(0, extMin);
     const eMin = minOpt ?? extMin;
     const eMax = maxOpt ?? Math.max(extMax, eMin);
-    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4);
+    // Shown without decimals, or bars of whole counts: ticks step in whole numbers so no label is rounded.
+    const whole = opts.decimals === 0 || wholeData;
+    const ticks = niceTicks(eMin, eMax, plotH > 150 ? 5 : 4, opts.unit, whole);
     const lo = minOpt ?? ticks[0];
     let hi = maxOpt ?? ticks[ticks.length - 1];
     if (!(hi > lo)) hi = lo + 1;
     const yTicks = ticks.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9);
-    const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals));
-    const left = Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14;
+    const yLabels = yTicks.map((t) => formatValue(t, opts.unit, opts.decimals, Math.max(0, ...yTicks.map(Math.abs))));
+    const left = labels ? Math.ceil(yLabels.reduce((m, l) => Math.max(m, l.length), 1) * CHAR_W) + 14 : BARE;
     return { lo, hi, yTicks, yLabels, left };
   };
-  const colsFor = (left: number) => Math.max(1, Math.floor(Math.max(1, size.width - left - RIGHT)));
+  const colsFor = (left: number) => Math.max(1, Math.floor(Math.max(1, size.width - left - right)));
   const valuesFor = (cols: number) => visible.map((s) => columnValues(s, range.start, range.end, cols));
 
   let dom: ReturnType<typeof domainFor>;
   let left: number;
   let columns: number;
   let allValues: Float32Array[];
-  if (!stacked) {
+  if (barStyle) {
+    // The extent is the tallest stack of samples at one time (negatives stack downwards); the
+    // width follows from the labels.
+    const up = new Map<number, number>();
+    const down = new Map<number, number>();
+    let wholeData = true;
+    for (const s of visible) {
+      for (const [t, v] of s.points) {
+        if (v === null || v === 0 || t < range.start || t > range.end) continue;
+        if (!Number.isInteger(v)) wholeData = false;
+        const sums = v > 0 ? up : down;
+        sums.set(t, (sums.get(t) ?? 0) + v);
+      }
+    }
+    let dMin = 0;
+    let dMax = 0;
+    for (const v of down.values()) dMin = Math.min(dMin, v);
+    for (const v of up.values()) dMax = Math.max(dMax, v);
+    dom = domainFor(dMin, dMax, wholeData);
+    left = dom.left;
+    columns = colsFor(left);
+    allValues = valuesFor(columns);
+  } else if (!stacked) {
     // The extent is the data's own; the width follows from the labels.
     let dMin = Infinity;
     let dMax = -Infinity;
@@ -228,7 +285,7 @@ export function buildFrame(
   } else {
     // The extent is the tallest column sum as drawn, and the columns depend on the width, which
     // depends on the labels: settle them together (two or three passes), so no band is clipped.
-    left = 56;
+    left = labels ? 56 : BARE;
     for (let pass = 0; ; pass++) {
       columns = colsFor(left);
       allValues = valuesFor(columns);
@@ -253,7 +310,7 @@ export function buildFrame(
     }
   }
   const { lo, hi, yTicks, yLabels } = dom;
-  const plot = { x: left, y: TOP, w: Math.max(1, size.width - left - RIGHT), h: plotH };
+  const plot = { x: left, y: top, w: Math.max(1, size.width - left - right), h: plotH };
   const yOf = (v: number) => plot.h - ((v - lo) / (hi - lo)) * plot.h;
 
   const out: FrameSeries[] = [];
@@ -275,6 +332,37 @@ export function buildFrame(
     out.push({ key: s.key, name: s.name, color: colors.get(s.key) as string, values, ys, base });
   });
 
+  let bars: FrameBar[] | undefined;
+  if (barStyle) {
+    const list: FrameBar[] = [];
+    bars = list;
+    const span = range.end - range.start;
+    // A bar is 0.7 of the query step wide. Series may hold only the steps with a value (a restart),
+    // so the gaps between samples say nothing about the step: they are used only when none is known.
+    let gap = step !== undefined && step > 0 ? step : 0;
+    if (gap === 0) {
+      const times = new Set<number>();
+      for (const s of visible) for (const p of s.points) if (p[1] !== null && p[0] >= range.start && p[0] <= range.end) times.add(p[0]);
+      const sorted = [...times].sort((a, b) => a - b);
+      const gaps = sorted.slice(1).map((t, i) => t - sorted[i]).sort((a, b) => a - b);
+      gap = gaps.length > 0 ? gaps[gaps.length >> 1] : span;
+    }
+    const w = Math.max(1, 0.7 * (span > 0 ? (gap / span) * plot.w : plot.w));
+    const zero = yOf(Math.min(hi, Math.max(lo, 0)));
+    const upTo = new Map<number, number>();
+    const downTo = new Map<number, number>();
+    visible.forEach((s) => {
+      const color = colors.get(s.key) as string;
+      for (const [t, v] of s.points) {
+        if (v === null || v === 0 || !(t >= range.start && t <= range.end) || span <= 0) continue;
+        const sums = v > 0 ? upTo : downTo;
+        const from = sums.get(t) ?? 0;
+        sums.set(t, from + v);
+        list.push({ key: s.key, color, x: ((t - range.start) / span) * plot.w - w / 2, w, y0: from === 0 ? zero : yOf(from), y1: yOf(from + v) });
+      }
+    });
+  }
+
   const thresholds = opts.thresholds.map((t: Threshold) => ({ value: t.value, color: `--${t.color}`, y: yOf(t.value) }));
   return {
     size,
@@ -286,14 +374,20 @@ export function buildFrame(
     yTicks,
     yLabels,
     yPositions: yTicks.map(yOf),
-    xTicks: timeTicks(range.start, range.end, Math.max(2, Math.floor(plot.w / 90))),
+    xTicks: labels ? timeTicks(range.start, range.end, Math.max(2, Math.floor(plot.w / 90))) : [],
     thresholds,
     alert: limit !== null && alert ? { op: alert.op, threshold: limit, y: yOf(limit), color: "--bad" } : null,
     baseline: yOf(Math.min(hi, Math.max(lo, 0))),
+    ...(bars ? { bars } : {}),
+    highlight: highlight !== null && visible.some((s) => s.key === highlight) ? highlight : null,
+    labels,
   };
 }
 
 const AREA_ALPHA = 0.18;
+const BAR_ALPHA = 0.85;
+/** How strongly the other series draw while one is highlighted (their colours stay the same). */
+export const HIGHLIGHT_DIM = 0.25;
 
 /**
  * Paint a frame. `colorOf` turns a token name into the colour to paint with (read from the page at
@@ -318,6 +412,7 @@ export function drawTimeSeries(
     const y = plot.y + frame.yPositions[i];
     ctx.fillStyle = colorOf("--rule");
     ctx.fillRect(plot.x, Math.round(y) - 0.5, plot.w, 1);
+    if (!frame.labels) continue;
     ctx.fillStyle = colorOf("--ink-3");
     ctx.fillText(frame.yLabels[i], plot.x - 8, y);
   }
@@ -325,10 +420,11 @@ export function drawTimeSeries(
   const span = range.end - range.start;
   ctx.textBaseline = "top";
   ctx.fillStyle = colorOf("--ink-3");
+  const gap = frame.xTicks.length > 1 ? frame.xTicks[1] - frame.xTicks[0] : 60;
   for (const t of frame.xTicks) {
     const x = plot.x + ((t - range.start) / span) * plot.w;
     ctx.textAlign = x < plot.x + 18 ? "left" : x > plot.x + plot.w - 18 ? "right" : "center";
-    ctx.fillText(formatTimeTick(t, span), x, plot.y + plot.h + 7);
+    ctx.fillText(formatTimeTick(t, span, gap), x, plot.y + plot.h + 7);
   }
 
   ctx.save();
@@ -336,10 +432,26 @@ export function drawTimeSeries(
   ctx.rect(plot.x, plot.y, plot.w, plot.h);
   ctx.clip();
 
+  // A highlighted series: the others draw dimmed, and it draws last, on top.
+  const lit = frame.highlight;
+  const strength = (key: string) => (lit === null || key === lit ? 1 : HIGHLIGHT_DIM);
+  const order = lit === null ? frame.series : [...frame.series.filter((s) => s.key !== lit), ...frame.series.filter((s) => s.key === lit)];
+
+  // Bars: a block per sample, nothing for a null or a zero.
+  if (frame.style === "bars" && frame.bars) {
+    for (const b of frame.bars) {
+      ctx.globalAlpha = BAR_ALPHA * strength(b.key);
+      ctx.fillStyle = colorOf(b.color);
+      const top = Math.min(b.y0, b.y1);
+      ctx.fillRect(plot.x + b.x, plot.y + top, b.w, Math.max(1, Math.abs(b.y0 - b.y1)));
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // Fills.
-  if (frame.style !== "lines") {
-    ctx.globalAlpha = AREA_ALPHA;
-    for (const s of frame.series) {
+  if (frame.style === "area" || frame.style === "stacked") {
+    for (const s of order) {
+      ctx.globalAlpha = AREA_ALPHA * strength(s.key);
       ctx.fillStyle = colorOf(s.color);
       let c = 0;
       while (c < columns) {
@@ -381,7 +493,8 @@ export function drawTimeSeries(
   // Lines: gaps break the path; a lone point is a dot.
   ctx.lineWidth = 1.5;
   ctx.lineJoin = "round";
-  for (const s of frame.series) {
+  for (const s of frame.style === "bars" ? [] : order) {
+    ctx.globalAlpha = strength(s.key);
     const color = colorOf(s.color);
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
@@ -400,6 +513,7 @@ export function drawTimeSeries(
     }
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
   ctx.restore();
 
   if (marks.length > 0) drawMarks(ctx, frame, colorOf, marks);

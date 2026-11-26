@@ -25,7 +25,7 @@ describe("formatValue", () => {
     expect(formatValue(3 * 1024 ** 2, "bytes", null)).toBe("3 MiB");
     expect(formatValue(512, "bytes", null)).toBe("512 B");
     expect(formatValue(1536, "Bps", null)).toBe("1.5 KiB/s");
-    expect(formatValue(0.25, "cores", null)).toBe("0.25 cores");
+    expect(formatValue(0.25, "cores", null)).toBe("250 m");
   });
   it("gives three significant digits, or the decimals asked for", () => {
     expect(formatValue(12.3456, "none", null)).toBe("12.3");
@@ -52,5 +52,27 @@ describe("formatValue", () => {
   });
   it("knows every unit", () => {
     for (const u of UNITS) expect(formatValue(1, u, null)).not.toBe("");
+  });
+});
+
+describe("small CPU values", () => {
+  it("read as millicores under one core", () => {
+    expect(formatValue(0.347, "cores", null)).toBe("347 m");
+    expect(formatValue(0.0347, "cores", null)).toBe("34.7 m");
+    expect(formatValue(0.002, "cores", null)).toBe("2 m");
+    expect(formatValue(0, "cores", null)).toBe("0 m");
+    expect(formatValue(1, "cores", null)).toBe("1 core");
+    expect(formatValue(2.5, "cores", null)).toBe("2.5 cores");
+    // Rounding up to a whole core never prints 1000 m.
+    expect(formatValue(0.9996, "cores", null)).toBe("1 core");
+  });
+
+  it("an axis or tooltip uses one unit, from its largest value", () => {
+    const ticks = [0, 0.2, 0.4, 0.6, 0.8];
+    expect(ticks.map((t) => formatValue(t, "cores", null, 0.8))).toEqual(["0 m", "200 m", "400 m", "600 m", "800 m"]);
+    const big = [0, 0.5, 1, 1.5];
+    expect(big.map((t) => formatValue(t, "cores", null, 1.5))).toEqual(["0 cores", "0.5 cores", "1 core", "1.5 cores"]);
+    // A shared value that rounds to a core moves the whole set to cores.
+    expect(formatValue(0.2, "cores", null, 0.9996)).toBe("0.2 cores");
   });
 });

@@ -21,7 +21,7 @@ from aiohttp.http_exceptions import HttpProcessingError
 from kubernetes_asyncio.client.exceptions import ApiException
 
 from omnikrux.clusters.registry import SOURCE_CLOUD, ClusterInfo, ClusterRegistry
-from omnikrux.kube.connections import ClusterConnections, cloud_kube_error, kube_error_message
+from omnikrux.kube.connections import ClusterConnections, cloud_kube_error
 from omnikrux.kube.http import KUBE_ERRORS, call_json
 from omnikrux.kube.tokens import ClusterUnavailable
 from omnikrux.monitoring.sources.connector import (
@@ -32,6 +32,7 @@ from omnikrux.monitoring.sources.connector import (
     status_message,
 )
 from omnikrux.monitoring.sources.health import run_test
+from omnikrux.monitoring.sources.messages import cluster_words
 from omnikrux.monitoring.sources.store import SourceStore
 from omnikrux.monitoring.sources.transport import (
     SourceTransport,
@@ -495,7 +496,7 @@ class Discovery:
         if info.source == SOURCE_CLOUD:
             return cloud_kube_error(LIST_ACTION, exc=exc).message
         log.info("Couldn't list a cluster's services (%s)", type(exc).__name__)
-        return kube_error_message(exc, LIST_ACTION)
+        return cluster_words(exc, info.name, LIST_ACTION)
 
     async def _probe(self, cluster_id: str, c: _Candidate) -> FoundTool:
         target = ClusterTarget(cluster_id, c.namespace, c.service, c.port, c.scheme)

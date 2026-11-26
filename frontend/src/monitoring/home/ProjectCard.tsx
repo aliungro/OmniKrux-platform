@@ -1,7 +1,8 @@
-import { useId } from "react";
+import { useId, type CSSProperties } from "react";
 import type { HealthOut, ProjectOut, SourceOut } from "../api/types";
 import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
 import { DOT } from "../sidebar/Sidebar";
+import { sortLinks, stateWords } from "../sources/sourceLabels";
 import s from "./MonitoringHome.module.css";
 
 /** A health reading older than this is shown with its age, never as current. */
@@ -62,15 +63,15 @@ export function ProjectCard({ project, health, now, clusterName, clusterGone, fi
   return (
     <button type="button" className={s.card} aria-describedby={warned.length ? warnId : undefined} onClick={(e) => onOpen(e.ctrlKey || e.metaKey)}>
       <span className={s.cardHead}>
-        <i className={s.dot} style={{ background: projectDot(project) }} aria-hidden="true" />
+        <i className={`${s.dot} ${s.headMark}`} style={{ "--mark": projectDot(project) } as CSSProperties} aria-hidden="true" />
         <span className={s.cardName}>{project.name}</span>
         {firing !== undefined && firing > 0 && <span className={s.firingCount}>{firingWords(firing)}</span>}
       </span>
       <span className={s.cardSub}>{kindLine(project, clusterName)}</span>
       {clusterGone && <span className={s.cardWarn}>Cluster no longer connected</span>}
       <span className={s.rows}>
-        {project.links.length === 0 && <span className={s.row}>No sources yet</span>}
-        {project.links.map((l) => {
+        {project.links.length === 0 && <span className={s.row}><span className={s.rowText}>No sources yet</span></span>}
+        {sortLinks(project.links).map((l) => {
           const h = health[l.source_id] ?? UNKNOWN;
           const state = stateOf(h);
           const why = state === "down" ? (h.message ?? undefined) : undefined;
@@ -78,7 +79,7 @@ export function ProjectCard({ project, health, now, clusterName, clusterGone, fi
           return (
             <span key={l.source_id} className={s.row} data-state={state} title={why}>
               <i className={s.pip} aria-hidden="true" />
-              <span className={s.rowText} title={why}>{`${l.source_name} · ${STATE_WORDS[state]}`}</span>
+              <span className={s.rowText} title={why}>{`${l.source_name} · ${stateWords(h, l.source_type)}`}</span>
               {age && <span className={s.age}>{age}</span>}
             </span>
           );

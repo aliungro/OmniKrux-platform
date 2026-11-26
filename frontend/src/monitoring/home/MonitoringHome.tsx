@@ -4,7 +4,7 @@ import { useClusters } from "../../api/useClusters";
 import { useMonitoringTree, useProjects, useSourceHealth, useSources } from "../api/hooks";
 import type { HealthOut, SourceOut } from "../api/types";
 import type { MonitoringPageProps } from "../MonitoringApp";
-import { buildSearchIndex, searchMonitoring, type SearchEntry } from "../search/search";
+import { buildSearchIndex, hitSubtitle, searchMonitoring, type SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
 import { FirstUse } from "./FirstUse";
 import { FiringSection, useFreshOverview } from "./FiringSection";
@@ -17,8 +17,6 @@ import s from "./MonitoringHome.module.css";
 export function healthSummary(sources: SourceOut[], health: Record<string, HealthOut>): { up: number; down: number; unknown: number } {
   return summarize(sources, health);
 }
-
-const KIND_LABEL: Record<SearchEntry["kind"], string> = { project: "Project", group: "Group", source: "Source", dashboard: "Dashboard" };
 
 /** Whether Home may take the keyboard as it appears: only when nothing else has it. */
 function keyboardIsFree(): boolean {
@@ -83,11 +81,11 @@ function HomeSearch({ index, mayFocus, onOpen }: { index: SearchEntry[]; mayFocu
             <li key={`${hit.kind}:${hit.id}`} id={`${id}-hit-${i}`} role="option" aria-selected={i === current} className={s.hit}
               onMouseDown={(e) => e.preventDefault()} onClick={(e) => choose(hit, e.ctrlKey || e.metaKey)}>
               <span className={s.hitName}>{hit.name}</span>
-              <span className={s.hitSub}>{KIND_LABEL[hit.kind]} · {hit.subtitle}</span>
+              <span className={s.hitSub}>{hitSubtitle(hit)}</span>
             </li>
           ))}
         </ul>
-        {hits.length === 0 && <p className={s.noHits} role="status">No project, group or source matches “{text.trim()}”.</p>}
+        {hits.length === 0 && text.trim() !== "" && <p className={s.noHits} role="status">No project, group or source matches “{text.trim()}”.</p>}
       </div>
     </div>
   );
@@ -164,7 +162,7 @@ export default function MonitoringHome({ nav, openInNewTab, onOpenSettings }: Mo
     const owner = tree.data.projects.find((x) => x.dashboards.some((d) => d.id === r.id))
       ?? tree.data.groups.find((x) => x.dashboards.some((d) => d.id === r.id));
     const title = owner?.dashboards.find((d) => d.id === r.id)?.title;
-    return title ? [{ key: `dashboard:${r.id}`, name: title, what: "Dashboard", view: { page: "dashboard", id: r.id } as MonitoringView }] : [];
+    return title ? [{ key: `dashboard:${r.id}`, name: `${title} · ${owner?.name ?? ""}`, what: "Dashboard", view: { page: "dashboard", id: r.id } as MonitoringView }] : [];
   });
 
   return (

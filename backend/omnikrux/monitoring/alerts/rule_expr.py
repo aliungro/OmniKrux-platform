@@ -224,16 +224,126 @@ def _number_text(value: float) -> str:
     return text.removesuffix(".0")
 
 
+def _in_raw_after(line: str, inside: bool) -> bool:
+    """Whether a backtick raw string is still open at the end of `line` (open at its start when
+    `inside`). Double and single quotes end on their line; `#` outside quotes starts a comment."""
+    quote: str | None = "`" if inside else None
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote == "`":
+            if c == "`":
+                quote = None
+        elif quote is not None:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c == "#":
+            break
+        elif c in "\"'`":
+            quote = c
+        i += 1
+    return quote == "`"
+
+
+def tidy_query(expr: str) -> str:
+    """The query as it is wrapped: without the blank space around it or blank lines inside it,
+    so a rule written over a few lines reads as one in its tool (`(count(up)\n) > 0`). A blank
+    line inside a backtick raw string is part of its value and stays."""
+    out: list[str] = []
+    inside = False
+    for line in expr.strip().split("\n"):
+        if inside or line.strip():
+            out.append(line)
+        inside = _in_raw_after(line, inside)
+    return "\n".join(out)
+
+
+def _word(c: str) -> bool:
+    return c.isalnum() or c in "_:."
+
+
+def query_shape(text: str) -> str:
+    """The text with its spacing made plain: white space outside strings and comments dropped,
+    except one space between two word characters (`a or b` stays apart from `aorb`). Strings and
+    comments are kept as written; a comment still ends its line."""
+    out: list[str] = []
+    space = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in " \t\r\n":
+            space = True
+            i += 1
+            continue
+        if c == "#":
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            out.append(text[i:end].rstrip() + "\n")
+            space = False
+            i = end
+            continue
+        if c in "\"'`":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c != "`" and text[j] == "\\" else 1
+            token = text[i : j + 1]
+        else:
+            token = c
+        if space and out and _word(out[-1][-1]) and _word(token[0]):
+            out.append(" ")
+        space = False
+        out.append(token)
+        i += len(token)
+    return "".join(out)
+
+
+def same_query_text(a: str, b: str) -> bool:
+    """Whether two rule texts are the same query, whatever their spacing (a text stored before
+    queries were tidied, and the same query tidied)."""
+    return a == b or query_shape(a) == query_shape(b)
+
+
+def _ends_in_comment(text: str) -> bool:
+    """Whether the text's last line ends inside a `#` comment (outside any string), which would
+    swallow whatever is written after it on that line."""
+    i, n, comment = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            comment = False
+        elif comment:
+            pass
+        elif c == "#":
+            comment = True
+        elif c in "\"'`":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c != "`" and text[j] == "\\" else 1
+            i = j
+        i += 1
+    return comment
+
+
+def _closed(text: str) -> str:
+    """The text and the bracket that closes the wrapper around it: on the same line, unless a
+    `#` comment at its end would swallow the bracket (a line feed then ends the comment). Nothing
+    else is added around the user's text."""
+    return f"{text}\n)" if _ends_in_comment(text) else f"{text})"
+
+
 def condition_expr(expr: str, cond: Condition) -> str:
-    """The rule's condition. A line feed ends the operand, so a `#` comment at the end of the
-    query can't swallow what the wrapper adds after it."""
+    """The rule's condition: the query wrapped as written (`(vector(1)) > 0`)."""
     sign = ">" if cond.op == "above" else "<"
-    left = f"sum({expr}\n)" if cond.of == "total" else f"({expr}\n)"
+    text = tidy_query(expr)
+    left = f"sum({_closed(text)}" if cond.of == "total" else f"({_closed(text)}"
     return f"{left} {sign} {_number_text(cond.threshold)}"
 
 
 def eval_expr(expr: str, of: Of) -> str:
-    return f"sum({expr}\n)" if of == "total" else expr
+    text = tidy_query(expr)
+    return f"sum({_closed(text)}" if of == "total" else text
 
 
 def is_log_query(expr: str) -> bool:

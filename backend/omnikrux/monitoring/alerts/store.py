@@ -22,6 +22,7 @@ from typing import Any, Literal
 from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnikrux.monitoring.alerts.rule_expr import same_query_text
 from omnikrux.monitoring.alerts.types import (
     ChannelPick,
     Condition,
@@ -730,6 +731,11 @@ class AlertStore:
                     by_project[spec.project_id] = row
                     added.append(row.id)
                     continue
+                # The same query with other spacing (a text stored before queries were tidied)
+                # keeps the stored text: it is applied in its tool as it is, and doesn't move.
+                for key in ("eval_expr", "rule_text"):
+                    if same_query_text(getattr(row, key), values[key]):
+                        values[key] = getattr(row, key)
                 if row.leaving or any(getattr(row, k) != v for k, v in values.items()):
                     if row.engine != spec.engine or row.source_id != spec.source_id:
                         row.state = "ok"

@@ -214,8 +214,7 @@ describe("silences", () => {
     await user.click(expire);
     const dialog = await screen.findByRole("alertdialog", { name: "Expire this silence?" });
     expect(within(dialog).getByText("Its alerts notify again at their next check.")).toBeTruthy();
-    const go = within(dialog).getByRole("button", { name: "Expire silence" });
-    await waitFor(() => expect(document.activeElement).toBe(go));
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(expire);
@@ -244,7 +243,8 @@ describe("silences", () => {
     });
     await user.click(await screen.findByRole("tab", { name: "Silences" }));
     const row = (await screen.findByText("Deploy window")).closest("li")!;
-    expect(row.textContent).toContain("In Alertmanager · Alertmanager");
+    expect(row.textContent).toContain("In Alertmanager");
+    expect(row.textContent).not.toContain("In Alertmanager · Alertmanager");
     expect(row.textContent).not.toContain("alerts now");
     await user.click(within(row).getByRole("button", { name: /^Expire…/ }));
     await user.click(await screen.findByRole("button", { name: "Expire silence" }));
@@ -259,7 +259,7 @@ describe("silences", () => {
       String(url).endsWith("/alerts/silences") && (init?.method ?? "GET") === "GET"
         ? Promise.resolve(json({
           silences: [silence(), silence({ id: "sil2", comment: "Planned", state: "pending", starts_at: ahead(120), ends_at: ahead(240) })],
-          problems: [{ source_name: "Alertmanager east", message: "It didn't answer. Check that it is running." }],
+          problems: [{ source_id: "am9", source_name: "Alertmanager east", message: "It didn't answer. Check that it is running.", unreachable: true }],
         }))
         : real(url, init));
     await user.click(await screen.findByRole("tab", { name: "Silences" }));
@@ -268,6 +268,55 @@ describe("silences", () => {
     expect(screen.getByText("Deploy window")).toBeTruthy();
     const planned = screen.getByText("Planned").closest("li")!;
     expect(planned.textContent).toMatch(/Starts /);
+  });
+
+  it("expired silences are folded apart and can be removed", async () => {
+    const user = userEvent.setup();
+    const ended = silence({ id: "old", comment: "Last night", state: "expired", starts_at: ago(300), ends_at: ago(60), affects: null });
+    const theirs = silence({
+      id: "x1", comment: "Their window", state: "expired", starts_at: ago(300), ends_at: ago(30), affects: null,
+      where: { kind: "alertmanager", source_id: "am1", source_name: "Alertmanager" },
+    });
+    const { api } = open({ silences: [silence(), ended, theirs] });
+    await user.click(await screen.findByRole("tab", { name: "Silences" }));
+    const active = (await screen.findByText("Deploy window")).closest("li")!;
+    expect(within(screen.getByRole("list", { name: "Silences" })).getAllByRole("listitem")).toEqual([active]);
+    expect(active.textContent).toContain("In OmniKrux");
+
+    const folded = screen.getByText("Expired (2)").closest("details")!;
+    expect(folded.open).toBe(false);
+    await user.click(screen.getByText("Expired (2)"));
+    const old = within(folded).getByText("Last night").closest("li")!;
+    expect(old.textContent).toMatch(/Expired at \d\d:\d\d/);
+    expect(old.textContent).not.toContain("until");
+    const other = within(folded).getByText("Their window").closest("li")!;
+    expect(other.textContent).toContain("In Alertmanager");
+    expect(other.textContent).not.toContain("In Alertmanager · Alertmanager");
+    // Only OmniKrux's own can be removed: an Alertmanager keeps its expired silences itself.
+    expect(within(other).queryByRole("button", { name: /Remove/ })).toBeNull();
+
+    await user.click(within(old).getByRole("button", { name: /^Remove/ }));
+    await waitFor(() => expect(api.requests.some((r) => r.method === "DELETE" && r.url.endsWith("/silences/omnikrux/old?expired=1"))).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Last night")).toBeNull());
+    expect(screen.getByText("Expired (1)")).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an unreachable Alertmanager can't be picked", async () => {
+    const user = userEvent.setup();
+    const far = { ...amLink, source_id: "am2", source_name: "Far AM" };
+    open({ projects: [{ ...dev, links: [link, amLink, far] }], silenceProblems: [
+      { source_id: "am2", source_name: "Far AM", message: "Can't reach Far AM.", unreachable: true },
+      { source_id: "am1", source_name: "Alertmanager", message: "Alertmanager answered HTTP 500.", unreachable: false },
+    ] });
+    await user.click(await screen.findByRole("tab", { name: "Silences" }));
+    await screen.findByText("Far AM: Can't reach Far AM.");
+    await user.click(screen.getByRole("button", { name: "New silence" }));
+    const far1 = await screen.findByRole("radio", { name: /Far AM \(can't be reached\)/ });
+    expect((far1 as HTMLInputElement).disabled).toBe(true);
+    const near = screen.getByRole("radio", { name: /^Alertmanager/ });
+    expect((near as HTMLInputElement).disabled).toBe(false);
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("no silences says so, and a form with changes asks before the view goes", async () => {

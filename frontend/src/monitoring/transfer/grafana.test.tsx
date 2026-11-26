@@ -7,7 +7,7 @@ import { renderMonitoringApp, tabsWith } from "../test/renderMonitoringApp";
 import { alertFormMarks, clearAlertForms } from "../alerts/rules/formSessions";
 import { TransferRequestError, type GrafanaDashboardsOut, type GrafanaOut } from "./api";
 import { GrafanaDashboardList } from "./GrafanaDashboardList";
-import { grafanaWhere } from "./grafanaLabels";
+import { connectionLabel, grafanaWhere } from "./grafanaLabels";
 
 const T = "2026-01-01T00:00:00Z";
 const TOKEN = "glsa_example-token-4711";
@@ -20,7 +20,7 @@ function grafana(id: string, name: string, over: Partial<GrafanaOut> = {}): Graf
   return {
     id, name, reach: "url", url: "http://grafana.example.invalid:3000", cluster_id: null, cluster_name: null, namespace: null, service: null,
     port: null, scheme: "http", path_prefix: "", auth: { type: "none", username: null, has_password: false, has_token: false },
-    dashboards_imported: 0, created_at: T, updated_at: T, ...over,
+    dashboards_imported: 0, same_as: null, created_at: T, updated_at: T, ...over,
   };
 }
 const bearer: GrafanaOut["auth"] = { type: "bearer", username: null, has_password: false, has_token: true };
@@ -92,9 +92,7 @@ describe("Grafana connections on the Sources page", () => {
     expect((within(dialog).getByLabelText("Address") as HTMLInputElement).placeholder).toBe("http://grafana.example:3000");
     await user.selectOptions(within(dialog).getByLabelText("Sign-in"), "bearer");
     await user.click(within(reach).getByRole("radio", { name: "Inside a cluster" }));
-    const signIn = within(dialog).getByLabelText("Sign-in") as HTMLSelectElement;
-    expect(signIn.value).toBe("none");
-    expect(signIn.disabled).toBe(true);
+    expect(within(dialog).queryByLabelText("Sign-in")).toBeNull();
     expect(within(dialog).getByText("A Grafana reached through its cluster is read without a sign-in (anonymous access).")).toBeTruthy();
     expect(within(dialog).queryByLabelText("Token")).toBeNull();
     // The backend's words for what is missing.
@@ -102,9 +100,6 @@ describe("Grafana connections on the Sources page", () => {
     expect(within(dialog).getByRole("alert").textContent).toBe("Pick the cluster, namespace, service and port.");
     await user.selectOptions(await within(dialog).findByLabelText("Cluster"), "c1");
     expect((within(dialog).getByLabelText("Name") as HTMLInputElement).placeholder).toBe("Grafana · dev");
-    await user.type(within(dialog).getByLabelText("Namespace"), "monitoring");
-    await user.type(within(dialog).getByLabelText("Service"), "grafana");
-    await user.type(within(dialog).getByLabelText("Port"), "80");
     await user.click(within(dialog).getByRole("button", { name: "Save connection" }));
     await waitFor(() => expect(api.state.transfer.grafana).toHaveLength(1));
     const post = api.requests.find((r) => r.method === "POST" && r.url === "/api/monitoring/grafana");
@@ -175,7 +170,7 @@ describe("Grafana connections on the Sources page", () => {
     expect(within(dialog).queryByText(why)).toBeNull();
     await user.click(test);
     expect(await within(dialog).findByText("Connected · Grafana 11.0.0 · 0 dashboards")).toBeTruthy();
-    const sent = api.requests.filter((r) => r.url === "/api/monitoring/grafana/test");
+    const sent = api.requests.filter((r) => r.url.startsWith("/api/monitoring/grafana/test"));
     expect(sent).toHaveLength(1);
     expect((sent[0].body as { url: string }).url).toBe("http://other.example.invalid:3000");
   });
@@ -198,7 +193,7 @@ describe("Grafana connections on the Sources page", () => {
     const real = globalThis.fetch;
     let release = () => {};
     vi.stubGlobal("fetch", async (url: RequestInfo | URL, init?: RequestInit) => {
-      if (String(url) === "/api/monitoring/grafana/test") await new Promise<void>((r) => { release = r; });
+      if (String(url).startsWith("/api/monitoring/grafana/test")) await new Promise<void>((r) => { release = r; });
       return real(url, init);
     });
     open();
@@ -228,7 +223,7 @@ describe("Grafana connections on the Sources page", () => {
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Grafana connections" }));
   });
 
-  it("removing a connection asks first and opens on its button", async () => {
+  it("removing a connection asks first and opens on Cancel", async () => {
     const user = userEvent.setup();
     const api = installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { dashboards_imported: 2 })] } }, fallback);
     open();
@@ -236,8 +231,7 @@ describe("Grafana connections on the Sources page", () => {
     await user.click(remove);
     const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
     expect(within(ask).getByText("Dashboards imported from it stay. To update them from their source later, pick their file.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Remove connection" }));
-    expect(within(ask).getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(document.activeElement).toBe(remove);
@@ -471,4 +465,108 @@ describe("Grafana dashboard checklist", () => {
     expect(screen.getByText("No dashboard matches. Try other words.")).toBeTruthy();
     expect(screen.queryByRole("group", { name: "Dashboards in Main" })).toBeNull();
   });
+});
+
+describe("Grafana connections, words", () => {
+  it("removing a connection with nothing imported says so", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { dashboards_imported: 0 })] } }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Remove Main" }));
+    const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
+    expect(within(ask).getByText("No dashboards were imported from it.")).toBeTruthy();
+    expect(within(ask).queryByText(/Dashboards imported from it stay/)).toBeNull();
+  });
+  it("in-cluster Grafana fields start filled", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Connect a Grafana" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect a Grafana" });
+    await user.click(within(dialog).getByRole("radio", { name: "Inside a cluster" }));
+    const field = (name: string) => within(dialog).getByLabelText(name) as HTMLInputElement;
+    expect([field("Namespace").value, field("Service").value, field("Port").value]).toEqual(["monitoring", "grafana", "80"]);
+  });
+
+  it("Test names the empty field", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({}, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Connect a Grafana" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect a Grafana" });
+    await user.click(within(dialog).getByRole("radio", { name: "Inside a cluster" }));
+    await user.selectOptions(await within(dialog).findByLabelText("Cluster"), "c1");
+    for (const [label, word] of [["Namespace", "namespace"], ["Service", "service"], ["Port", "port"]] as const) {
+      const input = within(dialog).getByLabelText(label) as HTMLInputElement;
+      const was = input.value;
+      await user.clear(input);
+      await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
+      expect(within(dialog).getByRole("alert").textContent).toBe(`Enter the ${word}.`);
+      expect(document.activeElement).toBe(input);
+      await user.type(input, was);
+      expect(within(dialog).queryByRole("alert")).toBeNull();
+    }
+    expect(api.requests.some((r) => r.url === "/api/monitoring/grafana/test")).toBe(false);
+  });
+
+  it("a second connection to one Grafana is noted", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({ transfer: { grafanaTests: { new: { ok: true, version: "12.1.0", message: null, dashboards: 2, same_as: "Main" } } } }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Connect a Grafana" }));
+    const dialog = screen.getByRole("dialog", { name: "Connect a Grafana" });
+    await user.type(within(dialog).getByLabelText("Address"), "http://grafana.example.invalid:3000");
+    await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
+    expect(await within(dialog).findByText("Connected · Grafana 12.1.0 · 2 dashboards")).toBeTruthy();
+    expect(within(dialog).getByText("Main already connects to this Grafana.")).toBeTruthy();
+    // Saving is still allowed, and a change takes the note away with the result.
+    await user.type(within(dialog).getByLabelText("Name"), "Second");
+    expect(within(dialog).queryByText("Main already connects to this Grafana.")).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Save connection" }));
+    await waitFor(() => expect(api.state.transfer.grafana).toHaveLength(1));
+  });
+
+  it("connection labels name the cluster once", () => {
+    const inCluster = grafana("g", "Grafana · dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "80" });
+    expect(connectionLabel(inCluster)).toBe("Grafana · dev · monitoring/grafana:80");
+    expect(connectionLabel(grafana("g", "Main"))).toBe("Main · http://grafana.example.invalid:3000");
+  });
+
+  it("removing a connection names the other that reaches the same Grafana", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ transfer: { grafana: [grafana("g1", "Main", { dashboards_imported: 2, same_as: "Lab" })] } }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Remove Main" }));
+    const ask = screen.getByRole("alertdialog", { name: "Remove the connection Main?" });
+    expect(within(ask).getByText("Dashboards imported from it can update from Lab instead.")).toBeTruthy();
+    expect(within(ask).queryByText(/pick their file/)).toBeNull();
+  });
+
+  it("testing an edit tells the server which connection it is", async () => {
+    const user = userEvent.setup();
+    const api = installFakeMonitoringApi({
+      transfer: { grafana: [grafana("g1", "Ops", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "80" })] },
+    }, fallback);
+    open();
+    await user.click(await screen.findByRole("button", { name: "Edit Ops" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Ops" });
+    await user.click(within(dialog).getByRole("button", { name: "Test connection" }));
+    await waitFor(() => expect(api.requests.some((r) => r.url.startsWith("/api/monitoring/grafana/test"))).toBe(true));
+    expect(api.requests.find((r) => r.url.startsWith("/api/monitoring/grafana/test"))?.url).toBe("/api/monitoring/grafana/test?editing=g1");
+  });
+
+  it("a row names the cluster once", async () => {
+    installFakeMonitoringApi({
+      transfer: {
+        grafana: [
+          grafana("g1", "Grafana · dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "80" }),
+          grafana("g2", "Ops", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "grafana", port: "3000" }),
+        ],
+      },
+    }, fallback);
+    open();
+    expect(await screen.findByText("monitoring/grafana:80")).toBeTruthy();
+    expect(screen.getByText("dev · monitoring/grafana:3000")).toBeTruthy();
+  });
+
 });

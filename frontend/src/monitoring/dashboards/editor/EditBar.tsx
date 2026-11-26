@@ -1,5 +1,5 @@
-// The header in edit mode: the Editing pill, Discard and Save dashboard; under it, why a save
-// didn't go through; and the question before discarding changes.
+// The header in edit mode: the Editing pill, Undo, Variables, Suggestions, Discard and Save dashboard; under it,
+// why a save didn't go through and what a removal took away; and the question before discarding changes.
 import { useId, useRef, type RefObject } from "react";
 import { failure } from "../../../api/http";
 import { DialogShell } from "../../../features/dock/ConfirmDialog";
@@ -10,15 +10,39 @@ export function EditingPill() {
   return <span className={s.pill}>Editing</span>;
 }
 
-export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef }: {
+export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef, suggestions, suggestionsRef, undo, variables }: {
   saving: boolean;
   onDiscard(): void;
   onSave(): void;
   discardRef: RefObject<HTMLButtonElement | null>;
   saveRef: RefObject<HTMLButtonElement | null>;
+  /** Shows or hides the suggestions column (not a draft edit, so it works while saving too). */
+  suggestions?: { open: boolean; onToggle(): void };
+  suggestionsRef?: RefObject<HTMLButtonElement | null>;
+  /** Undo: `can` is false when nothing in the session is left to undo (it says so, and stays). */
+  undo?: { can: boolean; onUndo(): void };
+  /** Opens the variables editor. */
+  variables?: { onOpen(): void; buttonRef: RefObject<HTMLButtonElement | null> };
 }) {
   return (
     <>
+      {undo && (
+        <button type="button" className={s.undo} aria-keyshortcuts="Control+Z" aria-disabled={!undo.can || undefined}
+          onClick={undo.onUndo}>
+          Undo
+        </button>
+      )}
+      {variables && (
+        <button ref={variables.buttonRef} type="button" className={s.toggle} aria-haspopup="dialog" onClick={variables.onOpen}>
+          Variables
+        </button>
+      )}
+      {suggestions && (
+        <button ref={suggestionsRef} type="button" className={s.toggle} aria-pressed={suggestions.open}
+          aria-keyshortcuts="s" onClick={suggestions.onToggle}>
+          Suggestions
+        </button>
+      )}
       <button ref={discardRef} type="button" className={s.discard} aria-disabled={saving || undefined}
         onClick={() => { if (!saving) onDiscard(); }}>
         Discard
@@ -28,6 +52,17 @@ export function EditControls({ saving, onDiscard, onSave, discardRef, saveRef }:
         Save dashboard
       </button>
     </>
+  );
+}
+
+/** Under the header after a removal: what went, and Undo (gone after the next edit or 10 s). */
+export function RemovedNote({ title, onUndo }: { title: string; onUndo(): void }) {
+  return (
+    // Not spoken: the grid's live region already says it once ("… Ctrl+Z brings it back.").
+    <div className={s.removed} role="status" aria-live="off">
+      <p className={s.removedLine}>Removed "{title}".</p>
+      <button type="button" className={s.removedUndo} onClick={onUndo}>Undo</button>
+    </div>
   );
 }
 
@@ -61,7 +96,7 @@ export function EditNotice({ error, onShowJson, actionRef }: {
   );
 }
 
-/** Asked before Discard drops changes: focus on Discard changes, Ctrl+Enter confirms, Esc cancels. */
+/** Asked before Discard drops changes: focus on Cancel, Ctrl+Enter confirms, Esc cancels. */
 export function DiscardDialog({ title, onCancel, onDiscard, restoreFocusTo }: {
   title: string;
   onCancel(): void;
@@ -69,14 +104,14 @@ export function DiscardDialog({ title, onCancel, onDiscard, restoreFocusTo }: {
   restoreFocusTo: RefObject<HTMLElement | null>;
 }) {
   const id = useId();
-  const go = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   return (
-    <DialogShell provider="monitoring" busy={false} onCancel={onCancel} onConfirm={onDiscard} first={go}
+    <DialogShell provider="monitoring" busy={false} onCancel={onCancel} onConfirm={onDiscard} first={cancel}
       restoreFocusTo={restoreFocusTo} labelledBy={`${id}-t`} className={s.dialog}>
       <h2 id={`${id}-t`} className={s.dialogTitle}>Discard your changes to "{title}"?</h2>
       <div className={s.dialogActions}>
-        <button type="button" className={s.secondary} onClick={onCancel}>Cancel</button>
-        <button ref={go} type="button" className={s.danger} onClick={onDiscard}>Discard changes</button>
+        <button ref={cancel} type="button" className={s.secondary} onClick={onCancel}>Cancel</button>
+        <button type="button" className={s.danger} onClick={onDiscard}>Discard changes</button>
       </div>
     </DialogShell>
   );

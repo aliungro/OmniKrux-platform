@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Job, Plan } from "../../api/types";
+import type { SourceOut } from "../api/types";
 import type { TabNav } from "../../features/shell/browserHistory";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
@@ -426,5 +427,43 @@ describe("reading the cluster", () => {
     await waitFor(() => expect(statusReads(fake)).toBe(3));
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_RUNNING_MS * 2 + 200); });
     await waitFor(() => expect(statusReads(fake)).toBeGreaterThanOrEqual(5));
+  });
+});
+
+describe("Monitoring tools, states and words", () => {
+  const found = (over: Record<string, unknown> = {}) => ({ type: "prometheus", state: "reachable", namespace: "obs", service: "prometheus-k8s", port: "9090", scheme: "http", version: null, message: null, existing_source_id: null, detail: null, ...over }) as const;
+  const aSource = (id: string, name: string): SourceOut => ({
+    id, name, type: "prometheus", reach: "cluster", url: null, cluster_id: "c1", cluster_name: "kind-install", namespace: "obs", service: "prometheus-k8s", port: "9090", scheme: "http", path_prefix: "",
+    auth: { type: "none", username: null, header_name: null, has_password: false, has_token: false, has_api_key: false, has_client_key: false, has_client_cert: false },
+    headers: [], has_ca: false, created_by_project_id: null, used_by: [], health: { state: "unknown", message: null, version: null, checked_at: null },
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+  });
+
+  it("a tool that is already a source is not offered to connect", async () => {
+    renderPage({ seed: { sources: [aSource("s1", "Prometheus · obs")], install: { ...AVAILABLE, status: { c1: status({ others: [found({ existing_source_id: "s1" })] }) } } } });
+    expect(await screen.findByText("kind-install already runs Prometheus at obs/prometheus-k8s, and it is the source Prometheus · obs.")).toBeTruthy();
+    expect(screen.queryByText(/You can connect it instead/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use it in a project" })).toBeNull();
+  });
+
+  it("a failed read says when, with one Try again and no Refresh", async () => {
+    const user = userEvent.setup();
+    const { fake } = renderPage({ seed: { install: { ...AVAILABLE, status: { c1: status({ install: record(), releases: [release()] }) } } } });
+    await screen.findByRole("table", { name: "Installed tools" });
+    fake.state.install.status.c1 = status({ install: record(), releases: [], checked_at: "2026-11-24T10:09:30", problem: "Couldn't read the monitoring tools in monitoring: the cluster didn't answer." });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Couldn't read at 10:09:30")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    noBody();
+  });
+});
+
+describe("Monitoring tools, a source not yet listed", () => {
+  it("never says the source is a saved source", async () => {
+    const found = { type: "prometheus", state: "reachable", namespace: "obs", service: "prometheus-k8s", port: "9090", scheme: "http", version: null, message: null, existing_source_id: "gone", detail: null } as const;
+    renderPage({ seed: { install: { tools: TOOLS, status: { c1: status({ others: [found] }) } } } });
+    expect(await screen.findByText("kind-install already runs Prometheus at obs/prometheus-k8s, and it is an existing source.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("a saved source");
   });
 });

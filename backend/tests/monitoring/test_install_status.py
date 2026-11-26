@@ -3,9 +3,14 @@ the workloads, read live each time with the moment they were read; a failed read
 words and shows no release; the tools the user runs elsewhere are listed apart."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import aiohttp
+
+from omnikrux.monitoring.install import status
 from omnikrux.monitoring.install.pins import CHARTS
 from omnikrux.monitoring.install.settings import InstallSettings
+from omnikrux.monitoring.sources import messages as source_messages
 from tests.fakekube import service
 from tests.monitoring.install_env import waiting_pod
 
@@ -203,3 +208,20 @@ async def test_settings_round_trip(monitoring_app, kube_cluster, fake_helm):
     assert (install["state"], install["message"]) == ("failed", "Helm said no.")
     assert (install["settings"]["retention_days"], install["settings"]["persist"]) == (3, False)
     assert install["sources"] == {"prometheus": None, "alertmanager": None, "loki": None}
+
+
+async def test_status_names_a_cluster_that_cant_be_reached(
+    installed_cluster, monitoring_app, monkeypatch
+):
+    http, app = monitoring_app
+
+    async def unreachable(*_args, **_kwargs):
+        key = SimpleNamespace(ssl=False, host="192.168.65.254", port=49603)
+        refused = ConnectionRefusedError(111, "Connect call failed ('192.168.65.254', 49603)")
+        raise aiohttp.ClientConnectorError(key, refused)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(status, "_releases", unreachable)
+    name = (await app.state.registry.get(installed_cluster.cluster_id)).name
+    out = await _status(http, installed_cluster.cluster_id)
+    assert out["problem"] == source_messages.CLUSTER_UNREACHABLE.format(cluster=name)
+    assert "Errno" not in out["problem"] and "192.168.65.254" not in out["problem"]

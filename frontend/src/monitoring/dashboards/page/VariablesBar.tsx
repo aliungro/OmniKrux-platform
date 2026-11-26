@@ -57,8 +57,11 @@ function Picker({
   useEffect(() => {
     if (!open) return;
     setFilter("");
-    const first = popup.current?.querySelector<HTMLElement>("input:checked, input, button");
-    first?.focus();
+    // The filter (when there is one) first, else the chosen value. Never scrolls the page.
+    const first = popup.current?.querySelector<HTMLElement>("[data-values-filter]")
+      ?? popup.current?.querySelector<HTMLElement>("input:checked")
+      ?? popup.current?.querySelector<HTMLElement>("input, button");
+    first?.focus({ preventScroll: true });
     // Only when it opens.
   }, [open]);
   // Try again took the keyboard with it when its message went away (the values came): it goes
@@ -127,9 +130,17 @@ function Picker({
           )}
           {!loading && values.length > FILTER_FROM && (
             <input className={`${s.input} ${s.valuesFilter}`} aria-label="Filter values" placeholder="Filter values" value={filter}
-              spellCheck={false} autoComplete="off" onChange={(e) => setFilter(e.target.value)} />
+              spellCheck={false} autoComplete="off" data-values-filter="" onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowDown") return;
+                const next = popup.current?.querySelector<HTMLElement>("[data-choices] input:checked")
+                  ?? popup.current?.querySelector<HTMLElement>("[data-choices] input");
+                if (!next) return;
+                e.preventDefault();
+                next.focus({ preventScroll: true });
+              }} />
           )}
-          <div className={s.choices}>
+          <div className={s.choices} data-choices="">
             {includeAll && (
               <label className={s.choice}>
                 <input type={type} name={groupName} checked={selected === "all"} onChange={toggleAll} />

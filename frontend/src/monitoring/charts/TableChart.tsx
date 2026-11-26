@@ -20,6 +20,12 @@ export interface TableChartProps {
   series: ChartSeries[];
 }
 
+/** A column's words: label names as sentence case (`pod_name` is Pod name), query names as written with a capital. */
+export function headerWords(name: string, isLabel: boolean): string {
+  const text = isLabel ? name.replace(/[_.]+/g, " ").trim() : name;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 const blank = (v: string | number | null) => v === null || v === "";
 
 function compare(a: string | number | null, b: string | number | null): number {
@@ -96,7 +102,7 @@ function TableList({ panel, table }: { panel: TablePanel; table: TableData }) {
               onClick={() => toggle(i)}
               onKeyDown={onKey(i)}
             >
-              {name}
+              <span className={styles.thText} title={headerWords(name, i < valueFrom)}>{headerWords(name, i < valueFrom)}</span>
               <span className={styles.sortMark} aria-hidden="true">
                 {sort && sort.column === i ? (sort.descending ? "▾" : "▴") : ""}
               </span>
@@ -114,11 +120,15 @@ function TableList({ panel, table }: { panel: TablePanel; table: TableData }) {
                 className={styles.tr}
                 style={{ gridTemplateColumns: columns, transform: `translateY(${v.start}px)`, height: ROW }}
               >
-                {row.cells.map((cell, i) => (
-                  <div key={i} role="cell" className={i >= valueFrom ? `${styles.td} ${styles.num}` : styles.td} title={typeof cell === "string" ? cell : undefined}>
-                    {i >= valueFrom ? formatValue(cell as number | null, o.unit, o.decimals) : blank(cell) ? NO_VALUE : cell}
-                  </div>
-                ))}
+                {row.cells.map((cell, i) => {
+                  const shown = i >= valueFrom ? formatValue(cell as number | null, o.unit, o.decimals) : blank(cell) ? NO_VALUE : String(cell);
+                  // A cut cell shows its whole value on hover.
+                  return (
+                    <div key={i} role="cell" className={i >= valueFrom ? `${styles.td} ${styles.num}` : styles.td} title={shown === NO_VALUE ? undefined : shown}>
+                      {shown}
+                    </div>
+                  );
+                })}
               </div>
             );
           })}

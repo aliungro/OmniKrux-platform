@@ -5,9 +5,10 @@ import { browseMetrics } from "../catalog/metrics";
 import type { BrowseMetric } from "../catalog/metrics";
 import type { Candidate } from "./candidates";
 import {
-  LEVEL_LABELS, STATUS_LABELS, UnwritableQuery, guessUnit, humanTitle, writeLogQuery, writeMetricQuery,
-  writeVolumeQuery,
+  LEVEL_LABELS, STATUS_LABELS, UnwritableQuery, guessUnit, humanTitle, legendFor, writeLogQuery,
+  writeMetricQuery, writeVolumeQuery,
 } from "./writeQuery";
+import { curatedPanels } from "./suggest";
 
 export const FINDER_MAX_RESULTS = 6;
 
@@ -52,6 +53,8 @@ export type FinderIndex = {
   labels: Map<string, number[]>;
   help: Map<string, number[]>;
   levelLabel: string | null;
+  /** The curated suggestions this catalog supports, with the words of their titles and metric names. */
+  curated: { candidate: Candidate; words: string[] }[];
 };
 
 const splitName = (s: string) => s.toLowerCase().split(/[_:]+/).filter(Boolean);
@@ -81,7 +84,10 @@ export function buildFinderIndex(catalog: OwnerCatalog): FinderIndex {
     }
   }
   const levelLabel = LEVEL_LABELS.find((l) => catalog.streams.some((s) => s.name === l)) ?? null;
-  return { entries, tokens, tokenList: [...tokens.keys()], labels, help, levelLabel };
+  const curated = curatedPanels(catalog).map((candidate) => ({
+    candidate, words: `${candidate.title} ${candidate.subtitle}`.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean),
+  }));
+  return { entries, tokens, tokenList: [...tokens.keys()], labels, help, levelLabel, curated };
 }
 
 function expand(w: string): Set<string> {
@@ -143,6 +149,24 @@ export function findPanels(index: FinderIndex, text: string, limit = FINDER_MAX_
   const withSplit = new Set<number>(splitWord === null ? [] : (index.labels.get(splitWord) ?? []));
   for (const i of withSplit) add(i, 4);
 
+  // Curated suggestions come first when every typed word is in their title or metric name. A split
+  // or a percentile asks for something the curated ones don't say, so they stay out of those.
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  if (splitWord === null && !percentile && content.length > 0) {
+    const has = (words: string[], w: string) => {
+      const plain = w.length > 1 && w.endsWith("s") ? w.slice(0, -1) : w;
+      return words.some((t) => t === w || t === plain || (w.length >= 3 && t.startsWith(w)));
+    };
+    for (const { candidate, words } of index.curated) {
+      if (out.length >= limit) break;
+      if (content.every((w) => has(words, w)) && !seen.has(candidate.expr)) {
+        seen.add(candidate.expr);
+        out.push(candidate);
+      }
+    }
+  }
+
   const scored: Scored[] = [];
   for (const [i, p] of points) {
     if (p <= 0) continue; // no content points: intent bonuses alone never qualify
@@ -176,13 +200,12 @@ export function findPanels(index: FinderIndex, text: string, limit = FINDER_MAX_
       b.series - a.series ||
       (a.title < b.title ? -1 : a.title > b.title ? 1 : 0),
   );
-  const out: Candidate[] = [];
-  const seen = new Set<string>();
   for (const s of scored) {
     if (out.length >= limit) break;
     let c: Candidate;
     try {
       c = write(index, s, quantile);
+      if (c.panelType !== "logs") c = { ...c, legend: legendFor(c.expr, c.title) };
     } catch (err) {
       if (err instanceof UnwritableQuery) continue; // never offer a query that can't be written
       throw err;
@@ -198,6 +221,12 @@ function write(index: FinderIndex, s: Scored, quantile: number): Candidate {
   const e = s.entry;
   const m = e.metric;
   if (m) {
+    // Plain CPU seconds by mode add up to the core count: the curated busy share says it right.
+    if (m.name === "node_cpu_seconds_total") {
+      const busy = index.curated.find((x) => x.candidate.key === "nodeCpu");
+      if (!busy) throw new UnwritableQuery("Node CPU can't be written without its mode label.");
+      return busy.candidate;
+    }
     const from = {
       sourceType: "prometheus" as const,
       sourceId: m.sourceId,

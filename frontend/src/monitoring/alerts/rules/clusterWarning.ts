@@ -19,10 +19,13 @@ export const mixedLinkWords = (source: string) =>
  * how (a filter OmniKrux decided isn't needed reads "auto"; one the user wrote, "user"). */
 export function mayMixClusters(
   project: Pick<ProjectOut, "kind" | "cluster_id">,
-  link: Pick<LinkOut, "filter" | "filter_origin"> & Partial<Pick<LinkOut, "source_type">>,
+  link: Pick<LinkOut, "filter" | "filter_origin"> & Partial<Pick<LinkOut, "source_type" | "source_cluster_id">>,
 ): boolean {
   // An Alertmanager has no labels to filter on: the warning is about data a rule or chart reads.
   if (link.source_type === "alertmanager") return false;
+  // A source reached inside the project's own cluster holds only that cluster's data, whatever
+  // the stored origin says.
+  if (link.source_cluster_id != null && link.source_cluster_id === project.cluster_id) return false;
   return project.kind === "kubernetes" && project.cluster_id !== null && link.filter.trim() === "" && link.filter_origin === "none";
 }
 

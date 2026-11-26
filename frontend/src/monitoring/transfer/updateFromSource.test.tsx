@@ -94,6 +94,7 @@ const preview = (over: Partial<UpdatePreviewOut> = {}): UpdatePreviewOut => ({
   source_label: "Team Grafana",
   source_version: 9,
   previous_source_version: 7,
+  no_new_version: false,
   digest: "dg-1",
   ...over,
 });
@@ -364,7 +365,7 @@ describe("Update from source", () => {
     const first = await open("d1");
     await screen.findByText("Imported from Team Grafana on 1 Mar 2026");
     expect((await menuItems(first.user)).map((i) => i.textContent)).toEqual([
-      "Copy dashboard…", "Export as JSON", "Import into Shop…", "Update from source…", "Delete dashboard…",
+      "Rename…", "Copy dashboard…", "Export as JSON", "Import into Shop…", "Update from source…", "Delete dashboard…",
     ]);
     // Import into Shop… opens Import for its project in a new tab.
     await first.user.click(screen.getByRole("menuitem", { name: "Import into Shop…" }));
@@ -377,7 +378,7 @@ describe("Update from source", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText(/^Imported from /)).toBeNull();
     expect((await menuItems(second.user)).map((i) => i.textContent)).toEqual([
-      "Copy dashboard…", "Export as JSON", "Import into Shop…", "Delete dashboard…",
+      "Rename…", "Copy dashboard…", "Export as JSON", "Import into Shop…", "Delete dashboard…",
     ]);
     cleanup();
 
@@ -610,4 +611,18 @@ describe("Update from source", () => {
     expect(screen.queryByText(REFUSED)).toBeNull();
     expect(document.activeElement).toBe(more());
   });
+  it("update with no new version says so and leaves the dashboard alone", async () => {
+    const api = seed({ updatePreviews: { d1: preview({ source_version: 7, previous_source_version: 7, no_new_version: true }) } });
+    const { user } = await open();
+    const box = await openUpdate(user);
+    expect(await within(box).findByText("From Team Grafana · version 7")).toBeTruthy();
+    expect(within(box).getByText("The source hasn't changed since this dashboard was imported (version 7). Your changes here stay.")).toBeTruthy();
+    expect(within(box).queryByRole("button", { name: "Replace with the source" })).toBeNull();
+    expect(within(box).queryByRole("figure")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(within(box).getByRole("button", { name: "Close" })));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(applies(api)).toEqual([]);
+    notBody();
+  });
+
 });

@@ -1,10 +1,16 @@
-/* The panel side panel (E2): a 360 px column at the right of the grid (the grid narrows), laid
-   over the grid's right side on a narrow window. Quiet rows and hairlines; the chart type tiles
-   and the run line carry the panel's state. Territories tokens only. */
+/* The panel side panel (E2): a 360 px column at the right of the grid. The grid never narrows
+   below 720 px for it: where the frame is under 720 + 14 + 360 px wide (a viewport under 960 px
+   always is) it is the "settings overlay" instead: a sheet over the grid's right side, from below
+   the dashboard header to the bottom of the page area. That is one state, one query. Quiet rows and
+   hairlines; the chart type tiles and the run line carry the panel's state. Territories tokens only.
+   `--sheet-top` (the header's height) and `--sheet-h` (from where the settings show to the page
+   area's bottom) are written by SidePanel; only the sheet uses them. */
 
 .side {
   position: sticky;
+  /* Under the dashboard header, so its title and close button stay in view as the page scrolls. */
   top: 58px;
+  z-index: 3;
   flex: none;
   width: 360px;
   max-width: 100%;
@@ -17,11 +23,29 @@
   overflow: hidden;
 }
 
+@container (max-width: 1093px) {
+  .side {
+    /* Out of the flow: the grid keeps the whole width, and the settings cover its right side as
+       a sheet that meets the header and runs to the page area's bottom, so Discard and Save (in the
+       header) stay in view and the last line is never under the status bar. */
+    top: var(--sheet-top, 46px);
+    height: var(--sheet-h, auto);
+    max-height: none;
+    margin-left: calc(-1 * (min(360px, 100%) + 14px));
+    z-index: 6;
+    border-bottom: 0;
+    border-radius: 12px 12px 0 0;
+    box-shadow: -10px 0 32px color-mix(in srgb, var(--bg) 70%, transparent);
+  }
+}
+
 .head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 14px 0;
+  background: var(--surf);
 }
 
 .title {
@@ -89,10 +113,54 @@
   overflow-y: auto;
 }
 
+/* The end of the settings: Duplicate panel, and Remove panel in a quiet danger tone. */
+.foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--rule);
+}
+
+.footAction {
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.footAction:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.footAction[data-danger] {
+  color: color-mix(in srgb, var(--bad) 85%, var(--ink-2));
+}
+
+.footAction[data-danger]:hover {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--rule));
+  background: color-mix(in srgb, var(--bad) 7%, transparent);
+  color: var(--bad);
+}
+
+.footAction:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The columns of the Query tab never grow past the sheet: a long query wraps or scrolls inside its box. */
 .rows {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
 }
 
 /* A field with its label above it (Source, Title, Description). */
@@ -101,6 +169,7 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
 }
 
 .fieldLabel {
@@ -133,7 +202,9 @@
 .input,
 .select,
 .source {
+  box-sizing: border-box;
   min-width: 0;
+  width: 100%;
   padding: 5px 8px;
   border: 1px solid var(--rule);
   border-radius: 7px;
@@ -144,6 +215,7 @@
 }
 
 .text {
+  box-sizing: border-box;
   width: 100%;
   resize: vertical;
 }
@@ -164,9 +236,13 @@
   color: var(--ink-3);
 }
 
+/* A long source or option name is cut with an ellipsis (its text is the field's title). */
 .select,
 .source {
   cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .input[aria-invalid="true"] {
@@ -203,12 +279,14 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .query {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .query[data-hidden] .code {
@@ -228,7 +306,10 @@
 }
 
 .code {
+  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
+  max-width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--rule);
   border-radius: 8px;
@@ -275,7 +356,9 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
   padding-top: 2px;
+  overflow-wrap: anywhere;
 }
 
 .runLine {
@@ -317,6 +400,17 @@
 
 .runLine[data-tone="quiet"] {
   color: var(--ink-3);
+}
+
+/* Why the run was empty: under the count, in reading type (the count stays mono). */
+.runReason {
+  margin: 0;
+  padding-left: 13px;
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.45;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
 }
 
 .hint {
@@ -384,6 +478,38 @@
   background: color-mix(in srgb, var(--warn) 7%, transparent);
   color: var(--ink);
   font-size: 12px;
+}
+
+.warningText,
+.warningRefused {
+  margin: 0;
+}
+
+.warningRefused {
+  margin-top: 6px;
+  color: var(--bad);
+}
+
+.warningAction {
+  margin-top: 6px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.warningAction:hover {
+  border-color: var(--warn);
+}
+
+.warningAction:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .note {
@@ -596,17 +722,4 @@
 .alertRemove:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
-}
-
-/* Narrow: the panel lies over the grid's right side. */
-@media (max-width: 959px) {
-  .side {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 5;
-    width: min(360px, 100%);
-    max-height: none;
-    box-shadow: 0 14px 36px color-mix(in srgb, var(--bg) 80%, transparent);
-  }
 }

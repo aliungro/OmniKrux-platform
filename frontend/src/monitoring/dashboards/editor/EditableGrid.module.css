@@ -26,6 +26,35 @@
   cursor: grabbing;
 }
 
+/* ⋯ in the tile's header: Settings, Duplicate, Remove by mouse. */
+.tileMenu {
+  flex: none;
+  width: 22px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tileMenu:hover,
+.tileMenu[aria-expanded="true"] {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.tileMenu:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 /* The corner: a small right angle drawn by two borders. */
 .corner {
   position: absolute;

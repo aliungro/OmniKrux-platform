@@ -92,7 +92,7 @@ describe("Groups", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByRole("heading", { name: "Delete group Prod?" })).toBeTruthy();
     expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
     expect(api.state.groups).toHaveLength(0);
@@ -122,7 +122,7 @@ describe("Groups", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("Its projects stay as they are.")).toBeTruthy();
     expect(within(dialog).getByText("Its dashboards go with it: Errors, Overview.")).toBeTruthy();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete group" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.click(within(dialog).getByRole("button", { name: "Delete group" }));
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
     expect(api.requests.some((r) => r.method === "DELETE" && r.url === "/api/monitoring/groups/g1?token=review-token")).toBe(true);
@@ -172,7 +172,7 @@ describe("Group delete review and alert rules", () => {
 describe("Group focus and arrival", () => {
   const onMain = () => document.activeElement?.tagName === "MAIN";
 
-  it("after Create group the keyboard is on the workspace and the group is never called gone", async () => {
+  it("after Create group the keyboard is on its heading and the group is never called gone", async () => {
     const user = userEvent.setup();
     installFakeMonitoringApi({ projects: projects() }, fallback);
     // The tree answers slowly, as a real server can: the new group must not look gone meanwhile.
@@ -188,11 +188,11 @@ describe("Group focus and arrival", () => {
     await user.type(await screen.findByLabelText("Name"), "Everything dev");
     await user.click(await screen.findByRole("checkbox", { name: "Dev" }));
     await user.click(screen.getByRole("button", { name: "Create group" }));
-    expect(await screen.findByRole("heading", { name: "Everything dev" })).toBeTruthy();
+    const heading = await screen.findByRole("heading", { name: "Everything dev" });
     await new Promise((r) => setTimeout(r, 50));
     watch.disconnect();
     expect(saidGone).toBe(false);
-    expect(onMain()).toBe(true);
+    expect(document.activeElement).toBe(heading);
   });
 
   it("the shortcut hands the keyboard to the workspace, in this tab or a new one", async () => {
@@ -238,5 +238,60 @@ describe("Esc closes Edit projects", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit projects" })));
     expect(doc.seen).toEqual([]);
     expect(api.state.groups[0].project_ids).toEqual(["p1"]);
+  });
+});
+
+describe("Groups, states and words", () => {
+  it("the New group name error clears on typing", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects() }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "newGroup" }) });
+    await user.click(await screen.findByRole("button", { name: "Create group" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("Enter a name for the group.");
+    await user.type(screen.getByLabelText("Name"), "P");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).getAttribute("aria-invalid")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("Edit projects has one Projects heading", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Prod", ["p1"])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Edit projects" }));
+    await screen.findByRole("checkbox", { name: "Dev" });
+    const page = document.querySelector<HTMLElement>("[data-monitoring-page]")!;
+    expect(within(page).getAllByText("Projects")).toHaveLength(1);
+    expect(screen.getByRole("group", { name: "Pick the projects" })).toBeTruthy();
+  });
+
+  it("an empty group says it has no projects", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: projects(), groups: [group("g1", "Empty", [])] }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    await user.click(await screen.findByRole("button", { name: "Delete group…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("It has no projects.")).toBeTruthy();
+    expect(within(dialog).queryByText("Its projects stay as they are.")).toBeNull();
+  });
+
+  it("a group chip shows a member's trouble", async () => {
+    const linked = { ...seedProject("p1", "Dev"), links: [{ source_id: "s1", source_name: "Prom", source_type: "prometheus" as const, filter: "", filter_origin: "none" as const, created_by_project: false }] };
+    const prom = { id: "s1", name: "Prom", type: "prometheus" as const, reach: "url" as const, url: "http://x", cluster_id: null, cluster_name: null, namespace: null, service: null, port: null, scheme: "http" as const, path_prefix: "",
+      auth: { type: "none" as const, username: null, header_name: null, has_password: false, has_token: false, has_api_key: false, has_client_key: false, has_client_cert: false },
+      headers: [], has_ca: false, created_by_project_id: null, used_by: [], health: { state: "unknown" as const, message: null, version: null, checked_at: null }, created_at: T, updated_at: T };
+    installFakeMonitoringApi({
+      sources: [prom],
+      projects: [linked, seedProject("p2", "Stage")],
+      groups: [group("g1", "Prod", ["p1", "p2"])],
+      health: { s1: { state: "down", message: "connection refused", version: null, checked_at: new Date().toISOString() } },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "group", id: "g1" }) });
+    const list = await screen.findByRole("list", { name: "Projects in this group" });
+    const dev = await within(list).findByRole("button", { name: /Dev/ });
+    await waitFor(() => expect(dev.getAttribute("data-health")).toBe("down"));
+    expect(within(list).getByRole("button", { name: /Stage/ }).getAttribute("data-health")).toBe("unknown");
+    expect(dev.getAttribute("aria-describedby")).toBeTruthy();
+    expect(document.getElementById(dev.getAttribute("aria-describedby") as string)?.textContent).toBe("A source of this project is down.");
   });
 });

@@ -56,6 +56,63 @@ export function resolveTime(
   return { start, end };
 }
 
+/** What the custom form says before anything is typed, and when a time can't be read. */
+export const LOCAL_TIME_COPY = "Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.";
+
+const LOCAL_TIME = /^([0-9]{4})-([0-9]{2})-([0-9]{2})[ T]([0-9]{2}):([0-9]{2})$/;
+
+/** Seconds for a local time written `YYYY-MM-DD HH:mm`; null when it isn't one or isn't a real time. */
+function parseLocal(text: string): number | null {
+  const m = LOCAL_TIME.exec(text.trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const date = new Date(0);
+  date.setFullYear(y, mo - 1, d);
+  date.setHours(h, mi, 0, 0);
+  const real = date.getFullYear() === y && date.getMonth() === mo - 1 && date.getDate() === d && date.getHours() === h && date.getMinutes() === mi;
+  return real ? date.getTime() / 1000 : null;
+}
+
+/**
+ * What the form stores for a typed time: `now`, `now-6h` and UTC times as they are; a local time
+ * as UTC (`2026-11-25T09:00:00Z`). Null when it can't be read.
+ */
+export function storedTime(text: string): string | null {
+  const t = text.trim();
+  if (t === "now" || REL_TIME.test(t) || validUtc(t)) return t;
+  const local = parseLocal(t);
+  return local === null ? null : new Date(local * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const pad = (n: number) => String(n).padStart(2, "0");
+const WORDS: Record<string, [string, string]> = { s: ["second", "seconds"], m: ["minute", "minutes"], h: ["hour", "hours"], d: ["day", "days"], w: ["week", "weeks"] };
+const howLong = (rel: RegExpExecArray) => `${Number(rel[1])} ${WORDS[rel[2]][Number(rel[1]) === 1 ? 0 : 1]}`;
+
+/**
+ * The range in words: a relative one as `Last 365 days`, an absolute one in local time
+ * (`25 Nov 10:00 – 12:00`; the year only when it isn't this one).
+ */
+export function rangeWords(time: TimeSpec, now: number): string {
+  const rel = REL_TIME.exec(time.from);
+  if (rel && time.to === "now") return `Last ${howLong(rel)}`;
+  const toRel = REL_TIME.exec(time.to);
+  const end = (): string => (time.to === "now" ? "now" : toRel ? `${howLong(toRel)} ago` : "");
+  if (rel && toRel) return `${howLong(rel)} ago – ${howLong(toRel)} ago`;
+  const a = parseTimeExpr(time.from, now);
+  const b = parseTimeExpr(time.to, now);
+  if (a === null || b === null) return timeLabel(time);
+  const A = new Date(a * 1000);
+  const B = new Date(b * 1000);
+  const thisYear = new Date(now * 1000).getFullYear();
+  const day = (d: Date) => `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() === thisYear ? "" : ` ${d.getFullYear()}`}`;
+  const clock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const from = `${day(A)} ${clock(A)}`;
+  if (time.to === "now") return `${from} – ${end()}`;
+  if (rel) return `${howLong(rel)} ago – ${day(B)} ${clock(B)}`;
+  return day(A) === day(B) ? `${from} – ${clock(B)}` : `${from} – ${day(B)} ${clock(B)}`;
+}
+
 export function timeLabel(t: TimeSpec): string {
   if (t.to === "now") {
     const preset = TIME_PRESETS.find((p) => p.from === t.from);

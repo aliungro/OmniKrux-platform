@@ -160,8 +160,7 @@ async def test_rule_6_the_source_cant_be_reached(monitoring_app, kind_cluster):
     assert answer == {
         "filter": "",
         "origin": "none",
-        "reason": "Couldn't check the source: "
-        + messages.REFUSED.format(name="Prometheus · 127.0.0.1"),
+        "reason": messages.REFUSED.format(name="Prometheus · 127.0.0.1"),
     }
 
 
@@ -232,3 +231,15 @@ async def test_the_context_name_matches_too(fake_prometheus, direct):
     assert suggestion.reason == (
         "This source holds several clusters; the filter keeps kind-omnikrux-dev."
     )
+
+
+async def test_rule_6_the_tools_own_refusal_keeps_the_prefix(
+    monitoring_app, kind_cluster, fake_prometheus
+):
+    http, _ = monitoring_app
+    for label in CANDIDATE_LABELS:
+        fake_prometheus.fail_paths[f"/api/v1/label/{label}/values"] = 400
+
+    answer = await suggest(http, cluster_id=kind_cluster, source=by_url(fake_prometheus.url))
+
+    assert answer["reason"] == "Couldn't check the source: refused"

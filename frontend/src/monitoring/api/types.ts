@@ -90,6 +90,8 @@ export interface HealthOut {
   message: string | null;
   version: string | null;
   checked_at: string | null;
+  /** The tool answered over HTTP, but not as its type (down, with the address or type to check). */
+  answered?: boolean;
 }
 
 export interface SourceOut {
@@ -188,6 +190,12 @@ export interface SuggestOut {
   reason: string | null;
 }
 
+export interface FilterCheckOut {
+  /** Whether anything in the source matches the filter; null when the source couldn't say. */
+  matches: boolean | null;
+  message: string | null;
+}
+
 // --- Projects, groups, the tree --------------------------------------------------------------
 
 export interface LinkOut {
@@ -197,6 +205,8 @@ export interface LinkOut {
   filter: string;
   filter_origin: FilterOrigin;
   created_by_project: boolean;
+  /** The cluster a source reached inside a cluster runs in; null for any other source. */
+  source_cluster_id?: string | null;
 }
 
 export interface ProjectOut {
@@ -276,6 +286,8 @@ export interface ProjectDeleteReviewOut {
   cluster_rules?: { id: string; name: string }[];
   /** The monitoring tools OmniKrux installed in the project's cluster: they stay. Left out when none. */
   tools_stay?: { cluster_id: string; cluster_name: string; namespace: string };
+  /** Its OmniKrux silences (an equality matcher on its name): they go with it. Left out when none. */
+  silences?: { id: string; matchers: string }[];
 }
 
 /** A dashboard an owner's deletion takes with it. */

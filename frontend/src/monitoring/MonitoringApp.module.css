@@ -51,17 +51,72 @@
   outline-offset: 2px;
 }
 
-@media (max-width: 760px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
+/* A narrow window (up to 760 px, the same query as MonitoringApp's): the sidebar folds into a
+   drawer behind the bar's Projects and pages, and the page takes the full height under the bar.
+   Opened, the drawer (Sidebar.module.css) and its scrim lie over the page below the bar. */
+.app[data-narrow] {
+  --drawer-bar-h: 40px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--drawer-bar-h) minmax(0, 1fr);
+}
 
-  .app > nav {
-    max-height: 42vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--rule);
-  }
+.drawerBar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surf);
+}
+
+.drawerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  min-width: 0;
+  padding: 0 11px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.drawerButton:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.drawerButton[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--focus) 35%, transparent);
+  background: color-mix(in srgb, var(--focus) 12%, transparent);
+}
+
+.drawerButton:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.drawerIcon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+/* Under the open drawer: the page dims, and a press on it closes the drawer (not the page). */
+.scrim {
+  position: absolute;
+  inset: var(--drawer-bar-h) 0 0;
+  z-index: 19;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
 }
 
 /* A page loading its own chunk: a quiet line where the page will be. */
@@ -70,4 +125,10 @@
   padding: 28px;
   color: var(--ink-3);
   font-size: 13px;
+}
+
+/* A page heading the app puts the keyboard on (arriving on a page) shows no box unless the
+   keyboard brought it there. */
+.app :is(h1, h2):focus:not(:focus-visible) {
+  outline: none;
 }

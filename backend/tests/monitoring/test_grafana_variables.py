@@ -334,3 +334,28 @@ def test_two_variables_the_validator_refuses_drop_only_those_two():
     ]
     assert skipped[0].reason.startswith("It couldn't be converted: variables[1].match")
     assert skipped[1].reason.startswith("It couldn't be converted: variables[3].match")
+
+
+def _variable(**over):
+    return {
+        "name": "ns",
+        "type": "query",
+        "query": "label_values(up, namespace)",
+        "datasource": "Prom",
+        "includeAll": True,
+        **over,
+    }
+
+
+def test_an_all_variable_imports_as_all():
+    def default(**over):
+        c = convert_dashboard([_variable(**over)])
+        return c.doc["variables"][0]["default"]
+
+    assert default() == "all"  # no current value
+    assert default(current={}) == "all"
+    assert default(current={"text": "All", "value": "$__all"}) == "all"
+    assert default(current={"text": ["All"], "value": ["x"]}) == "all"
+    assert default(current={"text": "api", "value": "api"}) == ["api"]
+    assert default(includeAll=False) == []
+    assert default(includeAll=False, current={"text": "All", "value": "$__all"}) == []

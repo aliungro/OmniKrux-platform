@@ -138,6 +138,13 @@ describe("the dry run line", () => {
     expect(dryRunWords(dry(), body({ scope: { kind: "group", id: "g1" } }), 0)).toBe("Over the last 6 hours this would not have fired (across 0 projects).");
   });
 
+  it("a condition that holds before its for has passed says when it fires", () => {
+    expect(dryRunWords(dry({ holding_now: true }), body({ for: "10m" }), 0))
+      .toBe("Over the last 6 hours this would not have fired. Its condition holds now; it fires after 10 min.");
+    // Once it fires, it says so instead.
+    expect(dryRunWords(dry({ firing_now: true, holding_now: false }), body(), 0)).toBe("Over the last 6 hours this would not have fired. It is firing now.");
+  });
+
   it("a run that couldn't check says why", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
     installFakeMonitoringApi({ dryRun: { status: 504, error: { code: "timeout", message: "The dry run took too long to replay. Narrow the query with a label, ask for fewer thresholds, or use a shorter window." } } });
@@ -211,13 +218,13 @@ describe("where it runs", () => {
       <WhereItRuns engine="tool" onChange={(e) => picked.push(e)} capabilities={[
         cap({ tool: "prometheus_rule" }),
         cap({ project_id: "p2", project_name: "lab", tool: null, reason: "Its Prometheus can't be reached." }),
-        cap({ project_id: "p3", project_name: "logs", tool: "loki_ruler" }),
+        cap({ project_id: "p3", project_name: "logs", source_name: "Logs", tool: "loki_ruler" }),
       ]} />,
     );
     expect((screen.getByRole("radio", { name: "In the tool" }) as HTMLInputElement).disabled).toBe(false);
-    expect(screen.getByText("In Prometheus (prod-east), fires even when OmniKrux is off")).toBeTruthy();
+    expect(screen.getByText("In Prometheus: fires even when OmniKrux is off.")).toBeTruthy();
     expect(screen.getByText("lab: checked by OmniKrux instead. Its Prometheus can't be reached.")).toBeTruthy();
-    expect(screen.getByText("In Loki (logs), fires even when OmniKrux is off")).toBeTruthy();
+    expect(screen.getByText("In Logs: fires even when OmniKrux is off.")).toBeTruthy();
     await user.click(screen.getByRole("radio", { name: "Checked by OmniKrux" }));
     expect(picked).toEqual(["omnikrux"]);
   });

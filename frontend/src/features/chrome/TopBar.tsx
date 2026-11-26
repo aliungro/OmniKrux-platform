@@ -22,6 +22,9 @@ function tokenTitle(c: ScopeCluster): string | undefined {
   return [account, tokenStatus(c)].filter(Boolean).join("\n") || undefined;
 }
 
+/** The box's name while it opens the command palette (a dialog); an app's own box names itself. */
+const PALETTE_LABEL = "Commands and kinds";
+
 function Logo() {
   return (
     <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
@@ -37,6 +40,7 @@ export function TopBar({
   onAudit,
   auditOpen = false,
   onPalette, appName, nav,
+  hint = "pods, deploy, svc, helm…", label = PALETTE_LABEL, prompt = capsOf("kinds")[0], keys = "Control+K :",
 }: {
   clusters: ScopeCluster[];
   appName?: string;
@@ -46,8 +50,13 @@ export function TopBar({
   /** Opens the audit log view; without it there is no button. */
   onAudit?: () => void;
   auditOpen?: boolean;
-  /** Opens the command palette; without it the box is a quiet placeholder. */
+  /** Opens the command palette (in Monitoring, its Find); without it the box is a quiet placeholder. */
   onPalette?: () => void;
+  /** The box's words, its name, the key drawn before them and its aria-keyshortcuts (an app's own box). */
+  hint?: string;
+  label?: string;
+  prompt?: string;
+  keys?: string;
 }) {
   return (
     <header className={s.top} data-page-keys>
@@ -91,18 +100,18 @@ export function TopBar({
         <button
           type="button"
           className={`${s.cmd} ${s.live}`}
-          aria-label="Commands and kinds"
-          aria-haspopup="dialog"
-          aria-keyshortcuts="Control+K :"
+          aria-label={label}
+          aria-haspopup={label === PALETTE_LABEL ? "dialog" : undefined}
+          aria-keyshortcuts={keys}
           onClick={onPalette}
         >
-          <b className={s.prompt} aria-hidden="true">{capsOf("kinds")[0]}</b>
-          <span className={s.hint}>pods, deploy, svc, helm…</span>
+          <b className={s.prompt} aria-hidden="true">{prompt}</b>
+          <span className={s.hint}>{hint}</span>
           <span className={`${k.k} ${s.cap}`} aria-hidden="true">{capsOf("palette")[0]}</span>
         </button>
       ) : (
         <div className={s.cmd} aria-hidden="true">
-          pods, deploy, svc, helm…
+          {hint}
         </div>
       )}
     </header>

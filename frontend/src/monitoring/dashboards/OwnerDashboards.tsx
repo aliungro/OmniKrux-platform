@@ -14,7 +14,8 @@ const EMPTY = {
   project: "No dashboards yet. Start one with New dashboard, or copy a ready-made view.",
   group: "No group dashboards yet. A group dashboard runs each panel once per project in the group.",
 } as const;
-const NO_PROMETHEUS = "Link a Prometheus-compatible source to get ready-made views.";
+const CANT_CHECK = "Can't be checked now.";
+const NO_READY = "Link a Prometheus-compatible or Loki source to get ready-made views.";
 
 /** "saved just now", "saved 5 min ago", "saved 3 h ago", "saved 2 days ago", then the date. */
 export function savedAgo(iso: string | null, now: number): string | null {
@@ -68,13 +69,16 @@ function DashboardRow({ d, onOpen }: { d: DashboardSummaryOut; onOpen(id: string
   );
 }
 
-/** A project's ready-made views: what each shows, what its Prometheus lacks, and Copy to edit. */
-function ReadyMadeViews({ projectId, prometheus, opener, onOpen }: {
-  projectId: string; prometheus: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void;
+/** A project's ready-made views: what each shows, what its sources lack, and Copy to edit. */
+function ReadyMadeViews({ projectId, readyMade, opener, onOpen, downCluster, manyPrometheus }: {
+  projectId: string; readyMade: boolean; opener: Opener; onOpen(id: string, newTab: boolean): void; downCluster: string | null; manyPrometheus: boolean;
 }) {
+  // Under the page's one cluster line, a reason that is that cluster's (the server's words
+  // `Can't reach {cluster}, so …`, also inside a note) is said once per view as Can't be checked now.
+  const byDownCluster = (text: string) => downCluster !== null && text.includes(`Can't reach ${downCluster}, so `);
   const ready = useReadyMade(projectId);
   const copy = useCopyToEdit(opener);
-  if (!prometheus) return <p className={s.muted}>{NO_PROMETHEUS}</p>;
+  if (!readyMade) return <p className={s.muted}>{NO_READY}</p>;
   if (ready.isError) return <p className={s.bad} role="alert">{failure(ready.error, "reload the page")}</p>;
   if (!ready.data?.length) return null;
   return (
@@ -88,8 +92,11 @@ function ReadyMadeViews({ projectId, prometheus, opener, onOpen }: {
               <div className={s.readyText}>
                 <button type="button" className={s.readyTitle} onClick={(e) => onOpen(r.id, toNewTab(e))}>{r.title}</button>
                 {r.description && <p className={s.description}>{r.description}</p>}
-                {r.notes.map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
-                {!r.checked && r.check_message && <p className={s.readyNote}>{r.check_message}</p>}
+                {manyPrometheus && r.source_name && <p className={s.reads}>{`Reads ${r.source_name}.`}</p>}
+                {r.notes.filter((n) => !byDownCluster(n)).map((n) => <p key={n} className={s.readyNote}>{n}</p>)}
+                {downCluster !== null && ((!r.checked && r.check_message) || r.notes.some(byDownCluster))
+                  ? <p className={s.readyNote}>{CANT_CHECK}</p>
+                  : !r.checked && r.check_message && <p className={s.readyNote}>{r.check_message}</p>}
                 {copy.error?.from === r.id && <p className={s.bad} role="alert">{copy.error.text}</p>}
               </div>
               <button type="button" className={s.copy} aria-label={`Copy to edit ${r.title}`} aria-disabled={copy.busy !== null || undefined}
@@ -104,14 +111,18 @@ function ReadyMadeViews({ projectId, prometheus, opener, onOpen }: {
   );
 }
 
-export function OwnerDashboards({ owner, tabId, nav, openInNewTab, prometheus = false }: {
+export function OwnerDashboards({ owner, tabId, nav, openInNewTab, readyMade = false, downCluster = null, manyPrometheus = false }: {
   owner: Owner;
   /** The tab the page is in: a dashboard made here opens in it (or a new one when it holds unsaved edits). */
   tabId: string;
   nav: MonitoringPageProps["nav"];
   openInNewTab(view: MonitoringView): void;
-  /** A project with a Prometheus-compatible source linked (ready-made views come from it). */
-  prometheus?: boolean;
+  /** A project with a Prometheus-compatible or Loki source linked (ready-made views come from them). */
+  readyMade?: boolean;
+  /** The cluster every failing source can't reach, which the project page says once: a view doesn't say why again. */
+  downCluster?: string | null;
+  /** The project links two or more Prometheus sources: each ready-made view says which one it reads. */
+  manyPrometheus?: boolean;
 }) {
   const list = useOwnerDashboards(owner);
   const [creating, setCreating] = useState(false);
@@ -143,7 +154,7 @@ export function OwnerDashboards({ owner, tabId, nav, openInNewTab, prometheus = 
           {list.data.map((d) => <DashboardRow key={d.id} d={d} onOpen={open} />)}
         </ul>
       )}
-      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} prometheus={prometheus} opener={opener} onOpen={open} />}
+      {owner.kind === "project" && <ReadyMadeViews projectId={owner.id} readyMade={readyMade} opener={opener} onOpen={open} downCluster={downCluster} manyPrometheus={manyPrometheus} />}
       {creating && (
         <NewDashboardDialog owner={owner} restoreFocusTo={newButton} onCancel={() => setCreating(false)}
           onCreated={(out) => { setCreating(false); openMade(out, { edit: true }, opener); }} />

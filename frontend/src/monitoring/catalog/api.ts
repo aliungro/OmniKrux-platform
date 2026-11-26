@@ -37,6 +37,8 @@ export interface SourceCatalogOut {
   labels: string[];
   streams: StreamLabelOut[];
   notes: string[];
+  /** How far back a Loki's streams were read (seconds); `null` for any other source. */
+  stream_window_seconds: number | null;
 }
 
 export interface CatalogOut {

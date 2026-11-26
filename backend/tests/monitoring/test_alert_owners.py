@@ -65,7 +65,7 @@ async def test_group_membership_moves_targets(monitoring_app, two_projects_on_on
     for rule in (checked, in_tool):
         found = await targets_by_project(http, rule["id"])
         assert sorted(found) == ["Team A", "Team B", "Team C"]
-        assert found["Team C"]["rule_text"] == '(rate(x{cluster="c"}[5m])\n) > 0.3'
+        assert found["Team C"]["rule_text"] == '(rate(x{cluster="c"}[5m])) > 0.3'
         assert found["Team C"]["leaving"] is False
 
     tool_a = (await targets_by_project(http, in_tool["id"]))["Team A"]
@@ -352,7 +352,7 @@ async def test_unlinked_source_turns_targets_into_errors(monitoring_app, linked_
     assert linked.status_code == 200, linked.text
     [target] = (await http.get(f"{RULES}/{rule['id']}")).json()["targets"]
     assert target["state"] == "waiting" and target["message"] == NOT_CHECKED_OFF
-    assert target["rule_text"] == '(rate(x{cluster="z"}[5m])\n) > 0.3'
+    assert target["rule_text"] == '(rate(x{cluster="z"}[5m])) > 0.3'
 
 
 async def test_a_deleted_source_leaves_its_projects_rules_without_one(

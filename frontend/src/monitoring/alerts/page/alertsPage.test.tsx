@@ -93,7 +93,7 @@ describe("the Alerts page", () => {
     ]));
     expect(details().textContent).toBe("PodCrashLooping");
     const facts = document.querySelector("dl")!;
-    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? · demo\/crasher/);
+    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? in kind-omnikrux-dev · demo\/crasher/);
     expect(facts.textContent).toContain("NotifiesSlack #ops");
     expect(facts.textContent).toContain("Checksevery 1 min · fires after 5 min");
     expect(facts.textContent).toContain("SeverityCritical");
@@ -109,7 +109,7 @@ describe("the Alerts page", () => {
     ]));
     expect(within(options()[0]).getByText("Silenced")).toBeTruthy();
     const facts = document.querySelector("dl")!;
-    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? · demo\/a · silenced/);
+    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? in kind-omnikrux-dev · demo\/a · silenced/);
     cleanup();
 
     // Some of them: the details count them, the list row carries no tag.
@@ -353,7 +353,7 @@ describe("the Alerts page", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByRole("heading").textContent).toBe('Delete the rule "SlowCheckout"?');
     await waitFor(() => expect(dialog.textContent).toContain(`Its panel "Latency" loses its alert; the dashboard saves a new version.`));
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete rule" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     // Esc goes back to More actions and deletes nothing.
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -559,6 +559,64 @@ describe("the Alerts page", () => {
     await user.click(screen.getByRole("button", { name: "Latency on Shop" }));
     await waitFor(() => expect(view(app)).toEqual({ page: "dashboard", id: "d1", panel: "p-3" }));
     expect(app.current().tabs[0].back).toHaveLength(1);
+  });
+
+  it("rule state names the project", async () => {
+    open();
+    await waitFor(() => expect(details().textContent).toBe("PodCrashLooping"));
+    const facts = document.querySelector("dl")!;
+    expect(facts.textContent).toMatch(/StateFiring for 12 min( \d+ s)? in kind-omnikrux-dev · demo\/crasher/);
+    // The stored query is shown trimmed, and a rule that has run shows when.
+    expect(facts.textContent).toMatch(/Checked\d\d:\d\d:\d\d/);
+    cleanup();
+
+    // Before its first check there is no Checked time beside "Not checked yet".
+    const waiting = rule("r14", "Tooled", dev, {
+      state: "waiting", engine: "tool",
+      targets: [target("t14", dev, {
+        state: "waiting", engine: "tool", tool: "prometheus_rule", where: "in Prometheus", last_eval_at: ago(1),
+        rule_text: "\n(up\n) > 5\n\n", message: "Not checked yet: the first check runs within 1 min.",
+      })],
+    });
+    open({ rules: [waiting], overview: overview([]) });
+    await waitFor(() => expect(details().textContent).toBe("Tooled"));
+    expect(document.querySelector("dl")!.textContent).not.toContain("Checked");
+    expect(document.querySelector("pre")!.textContent).toBe("(up\n) > 5");
+  });
+
+  it("a silence view for an alert that stopped firing says so", async () => {
+    const quiet = rule("r1", "PodCrashLooping", dev);
+    const { app } = open({ rules: [quiet, nodes, latency], overview: overview([]) });
+    app.navigate({ page: "alerts", tab: "silences", silence: { rule: "r1", target: "t-r1" } }, "replace");
+    expect(await screen.findByText("That alert isn't firing any more, so there's nothing to prefill.")).toBeTruthy();
+    expect(screen.queryByRole("form", { name: "New silence" })).toBeNull();
+    await waitFor(() => expect(view(app)).toEqual({ page: "alerts", tab: "silences" }));
+    expect(screen.getByRole("tab", { name: "Silences", selected: true })).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a silence ask is decided on a fresh read, not on an older list", async () => {
+    const quiet = rule("r1", "PodCrashLooping", dev);
+    const { api, app } = open({ rules: [quiet, nodes, latency], overview: overview([]) });
+    // The list read earlier says it isn't firing; it has started firing since.
+    await waitFor(() => expect(options().length).toBeGreaterThan(0));
+    api.state.rules = [crash, nodes, latency];
+    app.navigate({ page: "alerts", tab: "silences", silence: { rule: "r1", target: "t-r1" } }, "replace");
+    const matchers = (await screen.findByLabelText("Matchers")) as HTMLInputElement;
+    expect(matchers.value).toBe('alertname="PodCrashLooping",project="kind-omnikrux-dev"');
+    expect(screen.queryByText("That alert isn't firing any more, so there's nothing to prefill.")).toBeNull();
+    await waitFor(() => expect(view(app)).toEqual({ page: "alerts", tab: "silences" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("silenced alerts leave the counts", async () => {
+    const muted = { ...overview([{ ...firing(crash, 12), instances: 1, silenced: 1 }]) };
+    open({ overview: { ...muted, counts: { ...muted.counts, firing: 1, firing_unsilenced: 0 } } });
+    await waitFor(() => expect(details().textContent).toBe("PodCrashLooping"));
+    const rulesTab = screen.getByRole("tab", { name: /^Rules/ });
+    expect(rulesTab.textContent).toBe("Rules");
+    expect(screen.getByRole("button", { name: "Alerts" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Alerts, \d+ firing/ })).toBeNull();
   });
 
   it("a chart that can't reach the server says so in words", async () => {

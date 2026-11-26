@@ -6,10 +6,12 @@ import type { QueryRequest } from "../../api/types";
 import type { GroupOut } from "../../api/types";
 import { readRecent, recordRecent } from "../../home/recent";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
-import { gate, intercept, linkedProject, panel, seedDashboard, spec } from "../../test/dashboardSeeds";
+import { gate, intercept, linkedProject, panel, seedDashboard, spec, variable } from "../../test/dashboardSeeds";
 import { renderMonitoringApp, tabsWith } from "../../test/renderMonitoringApp";
 import type { ReadyMadeOut } from "../api";
+import { rangeWords } from "../time";
 import { editSessions } from "../editor/useDashboardEditor";
+import { writeDraft } from "../drafts/draftStore";
 
 // The chart chunk as a stub: it prints how many series it was given.
 vi.mock("../../charts", async () => {
@@ -19,7 +21,7 @@ vi.mock("../../charts", async () => {
 });
 
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 const fallback = async () => json([]);
@@ -71,6 +73,32 @@ describe("Dashboard page", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "API latency" })).toBeTruthy();
   });
 
+  it("suggestions are read only while editing with the column or Add panel open", async () => {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const catalogReads = () => api.requests.filter((r) => r.url.includes("/catalog")).length;
+    const queries = () => batches(api).flat().map((q) => q.query);
+    // Viewing: no catalog read, no previews; only the dashboard's own panel runs.
+    expect(catalogReads()).toBe(0);
+    expect(queries().every((q) => q === "up")).toBe(true);
+    // Editing a dashboard with panels: the column starts closed, and still nothing is read.
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const toggle = screen.getByRole("button", { name: "Suggestions" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(catalogReads()).toBe(0);
+    // The Suggestions button opens the column: now they are read.
+    await user.click(toggle);
+    expect(screen.getByRole("complementary", { name: "Suggestions" })).toBeTruthy();
+    await waitFor(() => expect(catalogReads()).toBe(1));
+    notBody();
+  });
+
   it("header tabs, time, refresh and edit by key", async () => {
     const user = userEvent.setup();
     const api = shop();
@@ -100,6 +128,12 @@ describe("Dashboard page", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
     const time = screen.getByRole("button", { name: "Last 6 hours" });
+    expect(document.activeElement).toBe(time);
+    // A second click on the button closes the menu instead of reopening it.
+    await user.click(time);
+    expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
+    await user.click(time);
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
     expect(document.activeElement).toBe(time);
     expect(time.getAttribute("aria-keyshortcuts")).toBe("t");
 
@@ -135,6 +169,89 @@ describe("Dashboard page", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Last 1 hour" }));
   });
 
+  it("the custom form shows its formats up front", async () => {
+    const user = userEvent.setup();
+    shop();
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await user.click(await screen.findByRole("button", { name: "Last 6 hours" }));
+    await user.click(screen.getByRole("menuitem", { name: "Custom range…" }));
+    // Before any error, once.
+    expect(screen.getAllByText("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.")).toHaveLength(1);
+    const from = screen.getByLabelText("From");
+    await user.clear(from);
+    await user.type(from, "2026-11-25 10:00");
+    const to = screen.getByLabelText("To");
+    await user.clear(to);
+    await user.type(to, "2026-11-25 12:00");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    const view = current().tabs[0].view as { time: { from: string; to: string } };
+    expect(view.time.from).toBe(new Date(2026, 10, 25, 10, 0).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    expect(view.time.to).toBe(new Date(2026, 10, 25, 12, 0).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    notBody();
+  });
+
+  it("a range change dims the old result until the new one arrives", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    expect(panelEl().dataset.stale).toBeUndefined();
+
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Last 6 hours" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Last 7 days" }));
+    // The last result stays, dimmed, and is marked as on its way; never read as current.
+    await waitFor(() => expect(panelEl().dataset.stale).toBe("true"));
+    expect(panelEl().getAttribute("aria-busy")).toBe("true");
+    expect(within(panelEl()).getByText("chart 1")).toBeTruthy();
+    expect(panelEl().querySelector('[class*="progress"]')).not.toBeNull();
+    act(() => held.open());
+    await waitFor(() => expect(panelEl().dataset.stale).toBeUndefined());
+    expect(panelEl().getAttribute("aria-busy")).toBeNull();
+    expect(panelEl().querySelector('[class*="progress"]')).toBeNull();
+    notBody();
+  });
+
+  it("moving a custom window of the same length dims the old result, and a plain refresh doesn't", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", time: { from: "2026-11-24T10:00:00Z", to: "2026-11-24T12:00:00Z" } }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: rangeWords({ from: "2026-11-24T10:00:00Z", to: "2026-11-24T12:00:00Z" }, Math.floor(Date.now() / 1000)) }));
+    await user.click(screen.getByRole("menuitem", { name: "Custom range…" }));
+    const from = screen.getByLabelText("From");
+    await user.clear(from);
+    await user.type(from, "2026-11-25T10:00:00Z");
+    const to = screen.getByLabelText("To");
+    await user.clear(to);
+    await user.type(to, "2026-11-25T12:00:00Z");
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(panelEl().dataset.stale).toBe("true"));
+    expect(panelEl().getAttribute("aria-busy")).toBe("true");
+    act(() => held.open());
+    await waitFor(() => expect(panelEl().dataset.stale).toBeUndefined());
+  });
+
+  it("a plain refresh of a relative range never dims", async () => {
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Refresh now" }));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(panelEl().dataset.stale).toBeUndefined();
+    expect(panelEl().getAttribute("aria-busy")).toBeNull();
+    act(() => held.open());
+  });
+
   it("a custom range checks its fields and keeps the menu open", async () => {
     const user = userEvent.setup();
     shop();
@@ -147,7 +264,8 @@ describe("Dashboard page", () => {
     await user.clear(from);
     await user.type(from, "yesterday");
     await user.click(screen.getByRole("button", { name: "Apply" }));
-    expect(screen.getByText('Use "now", "now-<number><s|m|h|d|w>", or a UTC time like 2026-11-19T10:00:00Z.')).toBeTruthy();
+    // The formats, said up front, are said again as the problem.
+    expect(screen.getAllByText("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.")).toHaveLength(2);
     expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
     await user.clear(from);
     await user.type(from, "now-2h");
@@ -311,6 +429,28 @@ describe("Dashboard page", () => {
     notBody();
   });
 
+  it("an owner read that fails while the keyboard is on Suggestions keeps the keyboard on the page", async () => {
+    const user = userEvent.setup();
+    shop();
+    const held = gate();
+    intercept((url) => (url === "/api/monitoring/projects/p1"
+      ? held.opened.then(() => new Response(JSON.stringify({ detail: "The project couldn't be read." }), { status: 500 }))
+      : null));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    await user.keyboard("e");
+    const toggle = await screen.findByRole("button", { name: "Suggestions" });
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    // The read fails: Suggestions goes with the rail, and the keyboard lands on the title, not <body>.
+    await act(async () => { held.open(); await held.opened; });
+    expect((await screen.findByRole("alert")).textContent).toContain("The project couldn't be read.");
+    expect(screen.queryByRole("button", { name: "Suggestions" })).toBeNull();
+    notBody();
+    expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1, name: "API latency" }));
+  });
+
   it("a group whose projects can't be read says why, and Try again reads them", async () => {
     const user = userEvent.setup();
     const g: GroupOut = { id: "g1", name: "Everything", project_ids: ["p1", "p2"], created_at: "", updated_at: "" };
@@ -362,7 +502,7 @@ describe("Dashboard page", () => {
     const user = userEvent.setup();
     const id = "ready:p1:pods";
     const ready: ReadyMadeOut = {
-      key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null,
+      key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null,
       notes: ["Restarts need kube-state-metrics; this Prometheus doesn't have it."],
     };
     const api = installFakeMonitoringApi({
@@ -387,10 +527,23 @@ describe("Dashboard page", () => {
     expect(api.requests.some((r) => r.url.includes("/versions"))).toBe(false);
   });
 
+  it("the Logs overview says it comes from Loki, not Prometheus", async () => {
+    const id = "ready:p1:logs";
+    const ready: ReadyMadeOut = { key: "logs", id, title: "Logs overview", description: "Logs", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { [id]: seedDashboard(id, SHOP, spec("Logs overview", [panel("p-1", "Pods", "up")]), true) },
+      readyMade: { p1: [ready] },
+      queryAnswers: { up: ok },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id }) });
+    expect(await screen.findByText("Ready-made views are generated from what Shop's Loki has. Copy one to change it.")).toBeTruthy();
+  });
+
   it("Copy to edit on a ready-made view's JSON tab copies it, like the header's", async () => {
     const user = userEvent.setup();
     const id = "ready:p1:pods";
-    const ready: ReadyMadeOut = { key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, notes: [] };
+    const ready: ReadyMadeOut = { key: "pods", id, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
     const api = installFakeMonitoringApi({
       projects: [linkedProject("p1", "Shop", "s1")],
       dashboards: { [id]: seedDashboard(id, SHOP, spec("Pod health", [panel("p-1", "Pods", "up")]), true) },
@@ -471,5 +624,286 @@ describe("Dashboard page", () => {
     await waitFor(() => expect(document.activeElement).toBe(home));
     fireEvent.click(home);
     expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+  });
+});
+
+describe("Renaming in the header", () => {
+  const puts = (api: FakeMonitoringApi) => api.requests.filter((r) => r.method === "PUT" && r.url === "/api/monitoring/dashboards/d1");
+  const workspaceTab = () => within(screen.getByRole("tablist", { name: "Monitoring tabs" })).getAllByRole("tab")[0];
+
+  async function opened() {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    return { user, api, title };
+  }
+
+  it("the title is a field in edit mode and saves with the dashboard", async () => {
+    const { user, api, title } = await opened();
+    expect(within(title).queryByRole("textbox")).toBeNull();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" }) as HTMLInputElement;
+    expect(field.value).toBe("API latency");
+    expect(field.maxLength).toBe(120);
+    await user.clear(field);
+    await user.type(field, "Checkout latency");
+    // Letters typed in the field are the field's: `e`, `t` and `r` did nothing else.
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    await user.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(puts(api)).toHaveLength(1));
+    expect((puts(api)[0].body as { spec: { title: string } }).spec.title).toBe("Checkout latency");
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Checkout latency" })).toBe(title);
+    expect(within(title).queryByRole("textbox")).toBeNull();
+    notBody();
+  });
+
+  it("Rename… opens edit mode on the title", async () => {
+    const { user, title } = await opened();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const items = screen.getAllByRole("menuitem").map((m) => m.textContent);
+    expect(items[0]).toBe("Rename…");
+    await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const field = await within(title).findByRole("textbox", { name: "Dashboard title" }) as HTMLInputElement;
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, "API latency".length]);
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    // Typing replaces the selected title.
+    await user.keyboard("Orders");
+    expect(field.value).toBe("Orders");
+  });
+
+  it("a blank title can't be saved", async () => {
+    const { user, api, title } = await opened();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" });
+    await user.clear(field);
+    const problem = screen.getByText("Give the dashboard a title.");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")).toBe(problem.id);
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    // Refused like any invalid draft: still editing, and the reason is said.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Use 1 to 120 characters");
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    expect(puts(api).every((r) => (r.body as { spec: { title: string } }).spec.title === "")).toBe(true);
+    // Typed again, the note goes.
+    await user.type(field, "Orders");
+    expect(screen.queryByText("Give the dashboard a title.")).toBeNull();
+    notBody();
+  });
+
+  it("the tab label follows the title being edited", async () => {
+    const { user, title } = await opened();
+    expect(workspaceTab().textContent).toContain("API latency");
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    const field = within(title).getByRole("textbox", { name: "Dashboard title" });
+    await user.clear(field);
+    await user.type(field, "Orders");
+    expect(workspaceTab().textContent).toContain("Orders");
+    // Blank: the tab keeps the saved name.
+    await user.clear(field);
+    expect(workspaceTab().textContent).toContain("API latency");
+    await user.type(field, "Orders");
+    // Discarded: the saved name again.
+    await user.click(screen.getByRole("button", { name: "Discard" }));
+    await user.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(workspaceTab().textContent).toContain("API latency"));
+    expect(workspaceTab().textContent).not.toContain("Orders");
+    notBody();
+  });
+});
+
+describe("Updated, refreshing and saving", () => {
+  const two = (n: number) => String(n).padStart(2, "0");
+  const clock = (ms: number) => { const d = new Date(ms); return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`; };
+
+  it("Updated moves after a variable change", async () => {
+    const user = userEvent.setup();
+    let now = new Date(2026, 10, 25, 10, 0, 0).getTime();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const doc = spec("Pods", [panel("p-1", "Restarts", 'up{namespace="$namespace"}')], [variable("namespace", "Namespace")]);
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, doc) },
+      labelValues: { "p1|namespace": ["api", "web"] },
+      queryAnswers: { 'up{namespace="api"}': ok, 'up{namespace="web"}': ok },
+    }, fallback);
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText(`Updated ${clock(now)}`)).toBeTruthy();
+    now += 5000;
+    await user.click(screen.getByRole("button", { name: "Namespace: api" }));
+    await user.click(within(screen.getByRole("group", { name: "Namespace" })).getByRole("radio", { name: "web" }));
+    expect(await screen.findByText(`Updated ${clock(now)}`)).toBeTruthy();
+  });
+
+  it("a fixed range can't auto refresh", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const api = shop();
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "2026-11-19T09:00:00Z", to: "2026-11-19T10:00:00Z" } }) });
+      expect(await screen.findByText("chart 1")).toBeTruthy();
+      const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
+      expect(select.disabled).toBe(true);
+      expect(select.title).toBe("A fixed time range doesn't change. Pick a range that ends now to refresh it.");
+      expect(select.value).toBe("");
+      const first = batches(api).length;
+      act(() => { vi.advanceTimersByTime(60_000); });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(batches(api).length).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a range that ends now, or at a relative time, keeps its refresh select", async () => {
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1", refresh: "10s", time: { from: "now-2h", to: "now-1h" } }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Auto-refresh" }) as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.title).toBe("");
+  });
+
+  it("save says Saved", async () => {
+    const user = userEvent.setup();
+    const api = shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    expect(await screen.findByText("chart 1")).toBeTruthy();
+    await user.keyboard("e");
+    await screen.findByRole("button", { name: "Save dashboard" });
+    expect(screen.queryByText('Saved "API latency".')).toBeNull();
+    await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
+    await user.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(api.requests.some((r) => r.method === "PUT")).toBe(true));
+    const note = await screen.findByText('Saved "API latency".');
+    expect(note.closest('[role="status"]')).toBeTruthy();
+    notBody();
+    // It goes after 4 seconds.
+    await waitFor(() => expect(screen.queryByText('Saved "API latency".')).toBeNull(), { timeout: 6000 });
+  }, 10_000);
+});
+
+describe("The header's structure", () => {
+  it("always wraps, and an offered draft's banner is its own row under the heading", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (file: string) => readFileSync(`src/monitoring/dashboards/${file}`, "utf8");
+    const css = read("page/DashboardPage.module.css");
+    const drafts = read("drafts/Drafts.module.css");
+    // No rule sets the header to nowrap (a full-row child would be squeezed into the title row).
+    expect(css).not.toMatch(/\.header\s*\{[^}]*nowrap/);
+    expect(css).not.toMatch(/\.controls\s*\{[^}]*nowrap/);
+    expect(css).toMatch(/\.header\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.titleProblem\s*\{[^}]*flex-basis:\s*100%/);
+    expect(drafts).toMatch(/\.banner\s*\{[^}]*flex:\s*1 1 100%/);
+    // The banner is a child of the header, after the heading and before the views.
+    shop();
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: 1, draft: spec("API latency", []), jsonText: null, writer: "w-other" });
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const banner = await screen.findByRole("region", { name: "Unsaved draft" });
+    const header = banner.parentElement!;
+    expect(header.tagName).toBe("HEADER");
+    const kids = [...header.children];
+    expect(kids[0].contains(screen.getByRole("heading", { level: 1 }))).toBe(true);
+    expect(kids.indexOf(banner)).toBe(1);
+    expect(kids[2].getAttribute("role")).toBe("tablist");
+  });
+
+  it("in edit mode the controls follow the title and the views take the next row, in drawing and keyboard order", async () => {
+    // jsdom lays nothing out: the rules and the order are checked here; the browser measured two
+    // rows at 1280 and 1440 px (title and controls, then the views).
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("src/monitoring/dashboards/page/DashboardPage.module.css", "utf8");
+    // From 1100 px the edit header is a grid: title and controls in the first row, the views (and
+    // the title's problem) in rows of their own, and no CSS order to make drawing and keys disagree.
+    const wide = css.slice(css.indexOf("@media (min-width: 1100px)"));
+    expect(wide).toMatch(/\.header\[data-editing\]\s*\{[^}]*display:\s*grid/);
+    expect(wide).toMatch(/\.header\[data-editing\] > \.controls\s*\{[^}]*grid-row:\s*1/);
+    expect(css).not.toMatch(/(?<![\w-])order:/);
+    // The wide controls' 6 px gap comes after the base rule, so it is the one used.
+    expect(css.indexOf("@media (min-width: 1100px)")).toBeGreaterThan(css.search(/\n\.controls\s*\{/));
+    const user = userEvent.setup();
+    shop();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    const title = await screen.findByRole("heading", { level: 1, name: "API latency" });
+    await waitFor(() => expect(document.activeElement).toBe(title));
+    const header = title.closest("header")!;
+    const kids = () => [...header.children];
+    // Viewing: heading, views, controls, as drawn.
+    expect(kids()[1].getAttribute("role")).toBe("tablist");
+    expect(header.hasAttribute("data-editing")).toBe(false);
+    const views = screen.getByRole("tablist", { name: "Dashboard views" });
+    await user.keyboard("e");
+    const save = await screen.findByRole("button", { name: "Save dashboard" });
+    notBody();
+    expect(header.hasAttribute("data-editing")).toBe(true);
+    // Editing: heading, controls, views. The views are not remounted.
+    expect(kids()[1].contains(save)).toBe(true);
+    expect(kids()[2]).toBe(views);
+    expect(screen.getByRole("tablist", { name: "Dashboard views" })).toBe(views);
+    // Tab goes from the title through the first row's controls, then to the views.
+    screen.getByRole("textbox", { name: "Dashboard title" }).focus();
+    const reached: Element[] = [];
+    for (let i = 0; i < 12 && !views.contains(document.activeElement); i++) {
+      await user.tab();
+      notBody();
+      reached.push(document.activeElement!);
+    }
+    expect(views.contains(document.activeElement)).toBe(true);
+    expect(reached).toContain(save);
+    expect(reached.indexOf(save)).toBeLessThan(reached.length - 1);
+  });
+});
+
+describe("Copy to edit", () => {
+  const ID = "ready:p1:pods";
+  const ready: ReadyMadeOut = { key: "pods", id: ID, title: "Pod health", description: "Pods", missing: [], checked: true, check_message: null, source_name: null, notes: [] };
+  const seedReady = () => installFakeMonitoringApi({
+    projects: [linkedProject("p1", "Shop", "s1")],
+    dashboards: { [ID]: seedDashboard(ID, SHOP, spec("Pod health", [panel("p-1", "Pods", 'up{namespace="$namespace"}')], [variable("namespace", "Namespace", { default: ["api"] })]), true) },
+    readyMade: { p1: [ready] },
+    labelValues: { "p1|namespace": ["api", "demo"] },
+    queryAnswers: { 'up{namespace="api"}': ok, 'up{namespace="demo"}': ok },
+  }, fallback);
+
+  it("copy to edit opens at the top with the note in view", async () => {
+    const user = userEvent.setup();
+    const scrolled: unknown[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      seedReady();
+      renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: ID }) });
+      await user.click(await screen.findByRole("button", { name: "Copy to edit" }));
+      const note = await screen.findByText('Copied "Pod health". Changes go to your copy.');
+      expect(note.closest('[role="status"]')).toBeTruthy();
+      const heading = screen.getByRole("heading", { level: 1 });
+      await waitFor(() => expect(document.activeElement).toBe(heading));
+      expect(scrolled.some((el) => el instanceof HTMLElement && el.tagName === "SECTION")).toBe(true);
+      expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+      notBody();
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("copy to edit keeps the chosen namespace", async () => {
+    const user = userEvent.setup();
+    const api = seedReady();
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: ID, vars: { namespace: ["demo"] } }) });
+    expect(await screen.findByRole("button", { name: "Namespace: demo" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Copy to edit" }));
+    await waitFor(() => expect(api.requests.some((r) => r.url === "/api/monitoring/dashboards/copy")).toBe(true));
+    expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body)
+      .toEqual({ from_id: ID, owner_kind: "project", owner_id: "p1", defaults: { namespace: ["demo"] } });
+    // The copy opens with demo chosen, not the document's own default.
+    expect(await screen.findByText('Copied "Pod health". Changes go to your copy.')).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Namespace: demo" })).toBeTruthy();
   });
 });

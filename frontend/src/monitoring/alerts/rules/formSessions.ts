@@ -77,6 +77,13 @@ export interface AlertFormMark {
   tab?: "silences" | "contacts";
   /** Or the Monitoring page it lives on (a Grafana connection form): any view of it keeps the form. */
   page?: MonitoringView["page"];
+  /** With `page`: the item it is about (a source's own page): another item's page is a way out. */
+  id?: string;
+  /**
+   * Holds only closing the tab: every other way out keeps the work (setup keeps its draft per tab),
+   * and a reload keeps it too.
+   */
+  closeOnly?: boolean;
 }
 
 /** By Monitoring tab id, then by form. */
@@ -91,7 +98,7 @@ export function markAlertForm(tabId: string, formId: string, mark: AlertFormMark
   else forms.delete(formId);
   if (forms.size > 0) alertFormMarks.set(tabId, forms);
   else alertFormMarks.delete(tabId);
-  holdUnload(formUnloadKey(tabId, formId), mark !== null);
+  holdUnload(formUnloadKey(tabId, formId), mark !== null && !mark.closeOnly);
 }
 
 /** Discard in the leave question: the tab's forms no longer hold it (they go with the page). */
@@ -100,21 +107,25 @@ export function clearAlertForms(tabId: string): void {
 }
 
 export const FORM_LEAVE_BODY = "Leaving loses what you entered in this form.";
+/** A tab's mark while its setup draft holds a choice (form id "setup"): only closing the tab loses it. */
+export const SETUP_MARK: AlertFormMark = { title: "New project", page: "setup", closeOnly: true };
+export const SETUP_LEAVE_BODY = "Closing this tab loses the project you started setting up.";
 
 /**
  * The tab an action would take a changed Silences or Contact points form away from, else null:
  * closing that tab; going to another page or another Alerts view (the form's own view is no way
  * out); Back or Forward to one; and, since such a form keeps nothing, switching to or opening
- * another tab while it is the active one.
+ * another tab while it is the active one. A close-only mark (setup) holds closing its tab only;
+ * there a form's own mark wins, so the question names the form. The mark found comes back too.
  */
 export function heldFormLeave(
   action: MonitoringTabAction,
   tabs: AppTabs<MonitoringView>,
   marks: ReadonlyMap<string, ReadonlyMap<string, AlertFormMark>> = alertFormMarks,
-): { tabId: string; title: string } | null {
-  const first = (tabId: string) => {
-    const forms = marks.get(tabId);
-    const mark = forms ? [...forms.values()][0] : undefined;
+): { tabId: string; title: string; mark: AlertFormMark } | null {
+  const first = (tabId: string, closing = false) => {
+    const forms = [...(marks.get(tabId)?.values() ?? [])];
+    const mark = forms.find((m) => !m.closeOnly) ?? (closing ? forms[0] : undefined);
     return mark ? { tabId, mark } : null;
   };
   if (action.type === "newTab" || action.type === "activateTab" || action.type === "nextTab" || action.type === "previousTab") {
@@ -122,14 +133,17 @@ export function heldFormLeave(
     if (!found) return null;
     if (action.type === "activateTab" && action.id === tabs.active) return null;
     if ((action.type === "nextTab" || action.type === "previousTab") && tabs.tabs.length < 2) return null;
-    return { tabId: found.tabId, title: found.mark.title };
+    return { tabId: found.tabId, title: found.mark.title, mark: found.mark };
   }
   if (action.type !== "closeTab" && action.type !== "navigate" && action.type !== "back" && action.type !== "forward") return null;
-  const found = first(action.id);
+  const found = first(action.id, action.type === "closeTab");
   if (!found) return null;
-  const held = { tabId: action.id, title: found.mark.title };
+  const held = { tabId: action.id, title: found.mark.title, mark: found.mark };
+  const { page, id, tab: alertsTab } = found.mark;
   const stays = (v: MonitoringView) =>
-    (found.mark.page !== undefined ? v.page === found.mark.page : v.page === "alerts" && (v.tab ?? "rules") === found.mark.tab);
+    (page !== undefined
+      ? v.page === page && (id === undefined || ("id" in v && v.id === id))
+      : v.page === "alerts" && (v.tab ?? "rules") === alertsTab);
   if (action.type === "closeTab") return held;
   const tab = tabs.tabs.find((t) => t.id === action.id);
   if (!tab) return null;

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { AppTabs } from "../../features/shell/workspace";
 import s from "../../features/shell/WorkspaceTabs.module.css";
+import m from "./MonitoringTabs.module.css";
 import type { MonitoringView } from "./tabState";
 
 interface Props {
   tabs: AppTabs<MonitoringView>;
-  labelFor(view: MonitoringView): string;
+  /** The tab's name; `tabId` lets a tab editing a dashboard show its draft title. */
+  labelFor(view: MonitoringView, tabId: string): string;
   /** The tab's top stripe: the project's colour, lilac otherwise. */
   colorFor(view: MonitoringView): string;
   onActivate(id: string): void;
@@ -14,13 +16,38 @@ interface Props {
   onNew(): void;
 }
 
-/** Monitoring's tab strip, drawn like the Kubernetes one. */
+/**
+ * Monitoring's tab strip, drawn like the Kubernetes one. The tabs scroll sideways in their own
+ * list, + stays in view after it, and the active tab is brought into view as it opens or is shown.
+ */
 export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, onNew }: Props) {
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const activeIndex = Math.max(0, tabs.tabs.findIndex((t) => t.id === tabs.active));
   const [focused, setFocused] = useState(activeIndex);
   const [refocus, setRefocus] = useState(false);
   useEffect(() => setFocused(activeIndex), [activeIndex, tabs.tabs.length]);
+  // Only when the tabs don't fit their list; never smooth (the strip jumps to the tab, with or
+  // without reduced motion). Again when the active tab's name changes (a page opened in it, a
+  // project read) and when the list's size changes (the window, the tab count), so it never sits
+  // half outside the strip with its × hidden.
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.active);
+  const activeLabel = activeTab ? labelFor(activeTab.view, activeTab.id) : "";
+  const activeId = useRef(tabs.active);
+  activeId.current = tabs.active;
+  const showActive = useRef(() => {
+    const tab = refs.current.get(activeId.current)?.parentElement;
+    const list = tab?.parentElement;
+    if (list && list.scrollWidth > list.clientWidth) tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
+  useEffect(() => showActive.current(), [tabs.active, activeLabel]);
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => showActive.current());
+    ro.observe(list);
+    return () => ro.disconnect();
+  }, []);
   // A closed tab's button is gone: the keyboard lands on the tab that is now active.
   useEffect(() => {
     if (!refocus) return;
@@ -47,12 +74,13 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
   };
 
   return (
-    <div className={s.strip} role="tablist" aria-label="Monitoring tabs">
+    <div className={s.strip}>
+      <div ref={listRef} className={m.list} role="tablist" aria-label="Monitoring tabs">
       {tabs.tabs.map((tab, i) => {
-        const label = labelFor(tab.view);
+        const label = labelFor(tab.view, tab.id);
         const active = tab.id === tabs.active;
         return (
-          <div className={s.wrap} key={tab.id} data-active={active}
+          <div className={`${s.wrap} ${m.wrap}`} key={tab.id} data-active={active}
             onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
             onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); close(tab.id); } }}>
             <div className={s.stripe}><span style={{ background: colorFor(tab.view) }} /></div>
@@ -62,18 +90,20 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
               role="tab"
               aria-selected={active}
               tabIndex={focused === i ? 0 : -1}
-              className={s.tab}
+              className={`${s.tab} ${m.tab}`}
+              title={label}
               onClick={() => onActivate(tab.id)}
               onKeyDown={(e) => onKeyDown(e, i)}
             >
-              {tab.view.page === "home" && <span aria-hidden="true">⌂ </span>}
-              {label}
+              {tab.view.page === "home" && <span className={m.home} aria-hidden="true">⌂</span>}
+              <span className={m.label}>{label}</span>
             </button>
-            <button type="button" className={s.close} aria-label={`Close ${label}`} title="Close tab (Alt W)" onClick={() => close(tab.id)}>×</button>
+            <button type="button" className={`${s.close} ${m.fixed}`} aria-label={`Close ${label}`} title="Close tab (Alt W)" onClick={() => close(tab.id)}>×</button>
           </div>
         );
       })}
-      <button type="button" className={s.add} aria-label="New tab" title="New tab (Alt T)" onClick={onNew}>+</button>
+      </div>
+      <button type="button" className={`${s.add} ${m.fixed}`} aria-label="New tab" title="New tab (Alt T)" onClick={onNew}>+</button>
     </div>
   );
 }

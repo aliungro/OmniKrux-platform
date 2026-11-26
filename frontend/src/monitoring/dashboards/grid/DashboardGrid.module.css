@@ -12,6 +12,8 @@
   display: flex;
   align-items: flex-start;
   gap: 14px;
+  /* The settings overlay's query (SidePanel.module.css) reads this frame's width. */
+  container-type: inline-size;
 }
 
 .frame > .grid {
@@ -85,6 +87,11 @@
   }
 }
 
+/* A tile whose ⋯ menu is open draws over its neighbours, so the menu isn't hidden under them. */
+.tile:has([aria-haspopup="menu"][aria-expanded="true"]) {
+  z-index: 4;
+}
+
 .tile[data-dragging] {
   z-index: 3;
   border-color: color-mix(in srgb, var(--focus) 70%, var(--rule));
@@ -144,6 +151,52 @@
   border: 1px solid var(--rule);
   border-radius: 10px;
   background: var(--surf);
+}
+
+/* A changed range or query: the last result stays, dimmed, under a 2 px line along the top until the new answer arrives. */
+.panel {
+  --stale-opacity: 0.45;
+  position: relative;
+}
+
+.panel[data-stale="true"] .body {
+  opacity: var(--stale-opacity);
+}
+
+.progress {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 10px;
+  left: 10px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--focus) 22%, transparent);
+  pointer-events: none;
+}
+
+.progress::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--focus);
+  content: "";
+  animation: progress-run 1.1s ease-in-out infinite;
+}
+
+@keyframes progress-run {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(290%); }
+}
+
+/* Reduced motion: the line doesn't move; it is a still, full cue. */
+@media (prefers-reduced-motion: reduce) {
+  .progress::after {
+    width: 100%;
+    animation: none;
+  }
 }
 
 .panel[data-state="unreachable"],
@@ -217,7 +270,7 @@
   cursor: help;
 }
 
-/* The right end of the head: the alert badge, then (in edit mode) the ⋮⋮ handle. */
+/* The right end of the head: the alert badge, then (in edit mode) the ⋯ menu and the ⋮⋮ handle. */
 .headEnd {
   flex: none;
   display: inline-flex;
@@ -304,19 +357,25 @@
   margin-top: 4px;
 }
 
+/* Nothing a panel draws leaves its tile: the body clips (a focus ring keeps its few pixels, inside
+   the tile's padding). The chart's tooltip is fixed on the page, outside this clip. */
 .body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
+/* The note takes the body's room and is the size its reason is clamped to (below). */
 .note {
   flex: 1;
   display: grid;
   place-items: center;
-  min-height: 40px;
+  min-height: 0;
+  container-type: size;
 }
 
 .noteText {
@@ -324,6 +383,45 @@
   color: var(--ink-3);
   font-size: 12.5px;
   text-align: center;
+}
+
+/* Why there is no data: a sentence to read, a step darker than the generic words. Long metric
+   names wrap anywhere; past four lines it is clamped (the full sentence is in its title), so the
+   tile never holds a scroll area the keyboard can't reach. */
+.noteReason {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  max-inline-size: 46ch;
+  padding-inline: 14px;
+  overflow: hidden;
+  color: var(--ink-2);
+  line-height: 1.45;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+/* A short tile clamps the reason to the whole lines it has room for (18 px each), never half a line. */
+@container (max-height: 75px) {
+  .noteReason {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+}
+
+@container (max-height: 57px) {
+  .noteReason {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+}
+
+@container (max-height: 39px) {
+  .noteReason {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
 }
 
 .failure {
@@ -375,12 +473,6 @@
 .retry:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-@media (max-width: 959px) {
-  .frame {
-    flex-wrap: wrap;
-  }
 }
 
 /* Narrow windows: every panel full width, in reading order, at its own height. */

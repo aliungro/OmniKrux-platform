@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { capsOf, pageKey, pressed } from "../../features/chrome/shortcuts";
+import { useId, useMemo, useState, type KeyboardEvent, type RefObject } from "react";
+import { capsOf } from "../../features/chrome/shortcuts";
 import k from "../../features/chrome/key.module.css";
-import { searchMonitoring, type SearchEntry } from "../search/search";
+import { FIND_MORE, findResults, hitSubtitle, type SearchEntry } from "../search/search";
 import type { MonitoringView } from "../shell/tabState";
 import s from "./Sidebar.module.css";
 
@@ -11,30 +11,20 @@ interface Props {
   onOpen(view: MonitoringView, newTab: boolean): void;
   /** Gives the keyboard back to the workspace. */
   onLeave(): void;
+  /** The field: MonitoringApp's Find (/, Ctrl K, the top bar) puts the keyboard here. */
+  inputRef: RefObject<HTMLInputElement | null>;
 }
 
-const KIND_LABEL: Record<SearchEntry["kind"], string> = { project: "Project", group: "Group", source: "Source", dashboard: "Dashboard" };
-
-/** "Find anything": projects, groups and sources by name. "/" outside a field comes here. */
-export function FindBox({ index, onOpen, onLeave }: Props) {
-  const input = useRef<HTMLInputElement>(null);
+/** "Find anything": pages, projects, groups, dashboards and sources by name. */
+export function FindBox({ index, onOpen, onLeave, inputRef: input }: Props) {
   const id = useId();
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
   const [open, setOpen] = useState(false);
-  const hits = useMemo(() => searchMonitoring(index, text), [index, text]);
-  const showing = open && text.trim() !== "";
+  const { shown: hits, more } = useMemo(() => findResults(index, text), [index, text]);
+  const typed = text.trim() !== "";
+  const showing = open && typed;
   const current = Math.min(active, Math.max(0, hits.length - 1));
-
-  useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (!pressed("monitoringFind", e) || !pageKey(e)) return;
-      e.preventDefault();
-      input.current?.focus();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
 
   const choose = (hit: SearchEntry, newTab: boolean) => {
     setText("");
@@ -76,7 +66,7 @@ export function FindBox({ index, onOpen, onLeave }: Props) {
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={showing && hits.length ? optionId(current) : undefined}
-          aria-keyshortcuts="/"
+          aria-keyshortcuts="/ Control+K"
           placeholder="Find anything"
           autoComplete="off"
           spellCheck={false}
@@ -100,12 +90,17 @@ export function FindBox({ index, onOpen, onLeave }: Props) {
               onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => choose(hit, e.ctrlKey || e.metaKey)}
             >
-              <span className={s.hitName}>{hit.name}</span>
-              <span className={s.hitSub}>{KIND_LABEL[hit.kind]} · {hit.subtitle}</span>
+              <span className={s.hitName} title={hit.name}>{hit.name}</span>
+              <span className={s.hitSub} title={hitSubtitle(hit)}>{hitSubtitle(hit)}</span>
             </li>
           ))}
         </ul>
-        {hits.length === 0 && <p className={s.noHits} role="status">No project, group or source matches “{text.trim()}”.</p>}
+        {/* Only while there is text: an empty field has nothing to announce. */}
+        {typed && (
+          <p className={s.noHits} role="status">
+            {hits.length === 0 ? `Nothing matches “${text.trim()}”.` : more > 0 ? FIND_MORE.replace("{n}", String(more)) : ""}
+          </p>
+        )}
       </div>
     </div>
   );

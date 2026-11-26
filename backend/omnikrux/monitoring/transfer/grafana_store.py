@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, get_args
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -25,6 +25,11 @@ KIND = "Grafana connection"
 GrafanaAuth = Literal["none", "basic", "bearer"]
 # The secret each sign-in uses.
 AUTH_SECRET = {"basic": "password", "bearer": "token"}
+
+
+class HandOverChanged(Exception):
+    """A removal whose audit record names a hand-over that can no longer happen (the receiver
+    went or changed, or nothing is left to move): nothing was changed."""
 
 
 class UnknownGrafana(KeyError):
@@ -101,6 +106,26 @@ def _only_for(auth_type: str, secrets: GrafanaSecrets) -> dict:
 
 def _same_url(a: str | None, b: str | None) -> bool:
     return a is not None and b is not None and a.rstrip("/") == b.rstrip("/")
+
+
+def same_grafana(a: GrafanaConfig, b: GrafanaConfig) -> bool:
+    """Whether both connections reach the same Grafana: the same address, or the same service
+    port in the same cluster. Targets only; the sign-in is never compared."""
+    if a.reach != b.reach:
+        return False
+    if a.cluster is not None and b.cluster is not None:
+        x, y = a.cluster, b.cluster
+        if (x.cluster_id, x.namespace, x.service, x.port, x.scheme) != (
+            y.cluster_id,
+            y.namespace,
+            y.service,
+            y.port,
+            y.scheme,
+        ):
+            return False
+    elif not _same_url(a.url, b.url):
+        return False
+    return a.path_prefix.strip("/") == b.path_prefix.strip("/")
 
 
 class GrafanaStore:
@@ -284,20 +309,37 @@ class GrafanaStore:
             await _flush(session, row.name)
             return self._config(row)
 
-    async def delete(self, id: str) -> None:
+    async def delete(
+        self, id: str, *, hand_over_to: str | None = None, promised: bool = False
+    ) -> None:
         """Remove the connection; the dashboards imported through it stay, and their origins
-        forget it (same transaction). UnknownGrafana."""
+        forget it or, with `hand_over_to`, read from that connection and name it (same
+        transaction, and only while it still exists and reaches the same Grafana).
+        `promised`: the audit record already says they were handed over, so a hand-over that
+        can't happen any more (or moves nothing) raises HandOverChanged and changes nothing.
+        UnknownGrafana."""
         async with self._sessionmaker.begin() as session:
-            removed = await session.scalar(
-                delete(GrafanaRow).where(GrafanaRow.id == id).returning(GrafanaRow.id)
-            )
-            if removed is None:
+            old = await session.get(GrafanaRow, id)
+            if old is None:
                 raise UnknownGrafana(id)
-            await session.execute(
+            receiver = await session.get(GrafanaRow, hand_over_to) if hand_over_to else None
+            if receiver is not None and not (
+                receiver.id != id and same_grafana(self._config(old), self._config(receiver))
+            ):
+                receiver = None
+            if promised and receiver is None:
+                raise HandOverChanged(id)
+            await session.delete(old)
+            values: dict = {"grafana_id": receiver.id if receiver else None}
+            if receiver is not None:
+                values["label"] = receiver.name
+            moved = await session.execute(
                 update(DashboardOriginRow)
                 .where(DashboardOriginRow.grafana_id == id)
-                .values(grafana_id=None)
+                .values(**values)
             )
+            if promised and moved.rowcount == 0:
+                raise HandOverChanged(id)
 
 
 async def _row(session: AsyncSession, id: str) -> GrafanaRow:

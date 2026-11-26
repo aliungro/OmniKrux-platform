@@ -3,15 +3,17 @@
 // mode it is also a tile (`tile`): focusable, named by its place, with move and resize handles;
 // it runs its queries 300 ms after the typing stops, and its frame flashes when it is edited (D1).
 // Memoised: an edit re-renders only the panel it changed. A panel with an alert wears its state in
-// the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet.
+// the corner (the worst of its targets); in edit mode a changed alert says it isn't saved yet, and
+// the tile's ⋯ menu (Settings, Duplicate, Remove) sits before its ⋮⋮ handle.
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { usePanelStates } from "../../alerts/api";
 import { notRefreshedWords, STATE_LABEL, STATE_READING, STATE_UNKNOWN, stateTone } from "../../alerts/format";
-import type { ResolvedVars } from "../interpolate";
-import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun } from "../runPanel";
+import { interpolateTitle, type ResolvedVars } from "../interpolate";
+import { buildPanelRun, panelRunKey, usePanelData, type DashboardOwner, type PanelData, type PanelDataResult, type PanelRun, type RangePin } from "../runPanel";
 import { sameJson } from "../sameJson";
 import type { Layout, PanelAlert, PanelSpec } from "../schema";
 import type { TileProps } from "../editor/EditableGrid";
+import { panelName } from "../editor/SidePanel";
 import { useDebouncedQueries } from "../editor/useDebouncedQueries";
 import { FLASH_MS, usePrefersReducedMotion } from "../motion";
 import type { PanelStatusStore } from "../page/useDashboardContext";
@@ -24,7 +26,7 @@ interface Props {
   owner: DashboardOwner | null;
   ownerName: string;
   vars: ResolvedVars;
-  range: { start: number; end: number };
+  range: { start: number; end: number; pin?: RangePin };
   waiting: boolean;
   /** Why it can't run (a variable it uses has no values): said as its failure, and nothing is sent. */
   blocked: string | null;
@@ -136,6 +138,11 @@ export const PanelFrame = memo(function PanelFrame({
   openRule, spotlight = 0,
 }: Props) {
   const titleId = useId();
+  // The tile shows the chosen values in place of `$name`; the stored title stays as written.
+  const shownTitle = useMemo(
+    () => interpolateTitle(panel.title, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v.value]))),
+    [panel.title, vars],
+  );
   const tipId = useId();
   const problemsId = useId();
   const frame = useRef<HTMLElement>(null);
@@ -160,9 +167,9 @@ export const PanelFrame = memo(function PanelFrame({
     [runPanel, owner, vars, range, ownerName],
   );
   const run = useStableRun(built);
-  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId);
+  const ran = usePanelData(dashboardId, runPanel, run, null, owner !== null && !waiting && blocked === null, changeId, range.pin);
   const result = useMemo<PanelDataResult>(
-    () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, updatedAt: null, failedAt: null }),
+    () => (blocked === null || waiting ? ran : { ...ran, data: blockedData(blocked), fetching: false, stale: false, updatedAt: null, failedAt: null }),
     [ran, blocked, waiting],
   );
   const key = panelRunKey(run);
@@ -185,8 +192,8 @@ export const PanelFrame = memo(function PanelFrame({
   const report = tile?.report;
   const { pending, flush } = debounced;
   useEffect(() => {
-    report?.(panel.id, { data: result.data, fetching: result.fetching, waiting, pending, flush, step: owner ? run.step : null });
-  }, [report, panel.id, result.data, result.fetching, waiting, pending, flush, owner, run.step]);
+    report?.(panel.id, { data: result.data, fetching: result.fetching, waiting, pending, flush, step: owner ? run.step : null, run: owner ? run : null });
+  }, [report, panel.id, result.data, result.fetching, waiting, pending, flush, owner, run]);
   useEffect(() => () => report?.(panel.id, null), [report, panel.id]);
 
   // The keyboard was inside this panel (a table header, a log line, Try again) and what held it
@@ -198,6 +205,8 @@ export const PanelFrame = memo(function PanelFrame({
   });
 
   const state = waiting ? null : result.data?.state;
+  // The last result, kept while the answer to a changed range or changed queries is on its way.
+  const stale = !waiting && blocked === null && result.stale;
   const partial = state === "partial" && result.data !== null;
   const { x, y, w, h } = layout ?? panel.layout;
   const place = {
@@ -206,7 +215,11 @@ export const PanelFrame = memo(function PanelFrame({
     "--rows": h,
     ...(tile?.offset ? { "--dx": `${tile.offset.x}px`, "--dy": `${tile.offset.y}px` } : {}),
   } as CSSProperties;
-  const named = tile ? { "aria-label": tile.label } : { "aria-labelledby": titleId };
+  // The tile is named by the title it shows (the chosen values in place of `$name`), then its place.
+  const stored = panelName(panel);
+  const named = tile
+    ? { "aria-label": tile.label.startsWith(stored) ? (shownTitle.trim() || "Untitled panel") + tile.label.slice(stored.length) : tile.label }
+    : { "aria-labelledby": titleId };
 
   const classes = [s.panel, tile ? s.tile : "", flash ? s.flash : "", spot ? s.spot : ""].filter(Boolean).join(" ");
   const saved = savedAlert === undefined ? panel.alert : savedAlert;
@@ -218,7 +231,7 @@ export const PanelFrame = memo(function PanelFrame({
     : null;
 
   return (
-    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"} data-panel-id={panel.id} data-spot={spot || undefined}
+    <section ref={frame} className={classes} style={place} {...named} data-state={state ?? "loading"} data-stale={stale || undefined} aria-busy={stale || undefined} data-panel-id={panel.id} data-spot={spot || undefined}
       tabIndex={tile?.tabIndex} data-tile-id={tile ? panel.id : undefined} data-selected={tile?.selected || undefined}
       data-dragging={tile?.dragging || undefined} data-motion={tile && reduced ? "off" : undefined}
       onKeyDown={tile?.onKeyDown} onClick={tile?.onClick}
@@ -228,10 +241,10 @@ export const PanelFrame = memo(function PanelFrame({
         if (e.relatedTarget !== null || e.target.isConnected) hadFocus.current = e.relatedTarget instanceof Node && !!frame.current?.contains(e.relatedTarget);
       }}>
       <header className={s.panelHead}>
-        <h2 id={titleId} ref={heading} tabIndex={-1} className={s.panelTitle}>{panel.title}</h2>
+        <h2 id={titleId} ref={heading} tabIndex={-1} className={s.panelTitle}>{shownTitle}</h2>
         {panel.description.trim() !== "" && (
           <span className={s.about}>
-            <button type="button" className={s.aboutButton} aria-label={`About ${panel.title}`} aria-describedby={tipId}>ⓘ</button>
+            <button type="button" className={s.aboutButton} aria-label={`About ${shownTitle}`} aria-describedby={tipId}>ⓘ</button>
             <span id={tipId} role="tooltip" className={s.tip}>{panel.description}</span>
           </span>
         )}
@@ -243,8 +256,9 @@ export const PanelFrame = memo(function PanelFrame({
             </span>
           </span>
         )}
-        {badge ? <span className={s.headEnd}>{badge}{tile?.grab}</span> : tile?.grab}
+        {(badge || tile) && <span className={s.headEnd}>{badge}{tile?.menu}{tile?.grab}</span>}
       </header>
+      {stale && <span className={s.progress} aria-hidden="true" />}
       <div className={s.body}>
         {/* Only edits animate: view mode has none, and reduced motion always jumps. */}
         <PanelBody panel={panel} run={run} result={result} waiting={waiting} changeId={changeId}

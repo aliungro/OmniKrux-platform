@@ -7,7 +7,7 @@ import { DialogShell } from "../../features/dock/ConfirmDialog";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { testGrafana, useDeleteGrafana, useGrafanaConnections, type GrafanaOut } from "./api";
 import { GrafanaForm } from "./GrafanaForm";
-import { GRAFANA_GONE, grafanaWhere, importedWords, testWords } from "./grafanaLabels";
+import { GRAFANA_GONE, handOverWords, importedWords, rowWhere, testWords } from "./grafanaLabels";
 import s from "./GrafanaConnections.module.css";
 
 type Editing = { kind: "new" } | { kind: "edit"; id: string } | null;
@@ -102,7 +102,7 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
                 <span className={s.mark} aria-hidden="true">G</span>
                 <div className={s.main}>
                   <span className={s.name}>{g.name}</span>
-                  <span className={s.where}>{grafanaWhere(g)}</span>
+                  <span className={s.where}>{rowWhere(g)}</span>
                 </div>
                 <span className={s.imported}>{importedWords(g.dashboards_imported)}</span>
                 <div className={s.buttons}>
@@ -134,7 +134,9 @@ export function GrafanaConnections({ tabId }: { tabId: string }) {
         <DeleteReviewDialog title={`Remove the connection ${removing.name}?`} action="Remove connection" busy={remove.isPending}
           error={removeError} restoreFocusTo={opener} onCancel={() => { setRemoving(null); setRemoveError(null); }}
           onConfirm={() => void confirmRemove()}>
-          <p>Dashboards imported from it stay. To update them from their source later, pick their file.</p>
+          <p>{removing.dashboards_imported === 0 ? "No dashboards were imported from it."
+            : removing.same_as ? handOverWords(removing.same_as)
+            : "Dashboards imported from it stay. To update them from their source later, pick their file."}</p>
         </DeleteReviewDialog>
       )}
     </section>

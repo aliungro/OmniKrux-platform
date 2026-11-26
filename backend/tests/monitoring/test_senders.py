@@ -22,10 +22,13 @@ from omnikrux.monitoring.alerts.contact_points.senders import (
     scrub,
 )
 from omnikrux.monitoring.alerts.contact_points.types import (
+    SLACK_ADDRESS,
     ContactPoint,
+    ContactPointInvalid,
     DeliveryFailed,
     Notice,
     NoticeInstance,
+    merged_secrets,
 )
 from tests.monitoring.fake_receivers import serve_fake_webhook
 from tests.monitoring.fakes import _serve
@@ -528,3 +531,64 @@ async def test_no_part_of_a_secret_survives_the_read_limit(senders):
             await senders.send(hook, notice_for_test("Hook"))
     assert "SECRET" not in failed.value.message and "PADDED" not in failed.value.message
     assert failed.value.message.startswith("Hook answered HTTP 400: seen ")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "http://example.com/not-slack",
+        "http://hooks.slack.com/services/T0/B0/x",
+        "https://hooks.slack.com.example.test/services/T0/B0/x",
+        "https://example.com/hooks.slack.com/x",
+    ],
+)
+def test_slack_needs_a_slack_address(address):
+    with pytest.raises(ContactPointInvalid) as refused:
+        merged_secrets("slack", {}, {"webhook_url": address})
+    assert refused.value.message == SLACK_ADDRESS
+    assert SLACK_ADDRESS == (
+        "Use a Slack webhook address that starts with https://hooks.slack.com/."
+    )
+    assert address not in refused.value.message
+    good = "https://hooks.slack.com/services/T0/B0/SECRET"
+    assert merged_secrets("slack", {}, {"webhook_url": good}) == {"webhook_url": good}
+    # Teams and webhooks keep any http or https address.
+    assert merged_secrets("teams", {}, {"webhook_url": address})["webhook_url"] == address
+
+
+class _Html(_Answer):
+    async def handle(self, request: web.Request) -> web.Response:
+        await request.read()
+        return web.Response(status=self.status, body=self.body, content_type="text/html")
+
+
+async def test_an_html_answer_is_not_shown(senders):
+    page = b'<!doctype html><html lang="en"><head><title>Example Domain</title></head></html>'
+    for server_type, body in ((_Html, page), (_Answer, page), (_Answer, b"  \n<HTML><body>x")):
+        async with _serve(server_type(405, body), None) as server:
+            hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in"})
+            with pytest.raises(DeliveryFailed) as failed:
+                await senders.send(hook, notice_for_test("Hook"))
+        assert failed.value.message == "Hook answered HTTP 405."
+    # A plain answer is still shown, once.
+    async with _serve(_Answer(400, b"no_team"), None) as server:
+        hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in"})
+        with pytest.raises(DeliveryFailed) as failed:
+            await senders.send(hook, notice_for_test("Hook"))
+    assert failed.value.message == "Hook answered HTTP 400: no_team"
+
+
+async def test_more_html_answers_are_not_shown(senders):
+    pages = (
+        "﻿<!DOCTYPE html><html><body>Nope</body></html>".encode(),
+        b'<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml">x',
+        b"<head><title>Error</title></head>",
+        b"  <body><h1>405 Not Allowed</h1></body>",
+        b"<!-- served by nginx -->\n<html>x</html>",
+    )
+    for page in pages:
+        async with _serve(_Answer(405, page), None) as server:
+            hook = cp("webhook", name="Hook", secrets={"url": f"{server.url}/in"})
+            with pytest.raises(DeliveryFailed) as failed:
+                await senders.send(hook, notice_for_test("Hook"))
+        assert failed.value.message == "Hook answered HTTP 405.", page

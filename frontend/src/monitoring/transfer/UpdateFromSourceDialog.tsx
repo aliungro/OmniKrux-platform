@@ -29,12 +29,14 @@ export const SOURCE_CHANGED = "The source changed since you reviewed it. Here is
 export const SAVED_ELSEWHERE = "This dashboard was saved somewhere else since you opened this. Review it again.";
 export const EDITED_SINCE_IMPORT = "This dashboard was changed in OmniKrux since it was imported. Updating replaces those changes; they stay in Versions.";
 export const NOTHING_CHANGED = "Nothing changed: the source matches this dashboard.";
+export const noNewVersionWords = (v: number) => `The source hasn't changed since this dashboard was imported (version ${v}). Your changes here stay.`;
 export const updatedWords = (title: string) => `Updated "${title}" from its source.`;
 
 /** The source line: where it comes from and, for a Grafana, which of its versions replaces which. */
 export function fromWords(label: string, kind: OriginOut["kind"], preview: UpdatePreviewOut | null): string {
   const was = preview?.previous_source_version ?? null;
   const now = preview?.source_version ?? null;
+  if (preview?.no_new_version && (now ?? was) !== null) return `From ${label} · version ${now ?? was}`;
   return kind === "grafana" && was !== null && now !== null ? `From ${label} · Grafana version ${was} → ${now}` : `From ${label}`;
 }
 
@@ -141,7 +143,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   useLayoutEffect(() => {
     if (!preview || !focusResult.current) return;
     focusResult.current = false;
-    (preview.same ? closeRef : replaceRef).current?.focus();
+    (preview.same || preview.no_new_version ? closeRef : replaceRef).current?.focus();
   }, [preview]);
 
   // Whatever had the keyboard went away with what it was part of (a source's select when a check
@@ -210,7 +212,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   };
 
   const replace = async () => {
-    if (!preview || preview.same || checking || applying) return;
+    if (!preview || preview.same || preview.no_new_version || checking || applying) return;
     if (refuse?.()) {
       onClose(false, undefined, "refused");
       return;
@@ -247,7 +249,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
   };
 
   const onConfirm = () => {
-    if (preview && !preview.same) void replace();
+    if (preview && !preview.same && !preview.no_new_version) void replace();
     else if (!preview && asks) runCheck();
   };
   const cancel = () => { if (!applying) onClose(false); };
@@ -313,8 +315,9 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
         )}
         {notice && <p className={x.notice} role="alert">{notice}</p>}
 
-        {preview && preview.same && <p className={x.same} role="status">{NOTHING_CHANGED}</p>}
-        {preview && !preview.same && (
+        {preview?.no_new_version && <p className={x.same} role="status">{noNewVersionWords(preview.source_version ?? preview.previous_source_version ?? 0)}</p>}
+        {preview && preview.same && !preview.no_new_version && <p className={x.same} role="status">{NOTHING_CHANGED}</p>}
+        {preview && !preview.same && !preview.no_new_version && (
           <div className={x.review} data-stale={checking || undefined}>
             {preview.identity_warning && <p className={x.warn}>{preview.identity_warning}</p>}
             {preview.edited_since_import && <p className={x.warn}>{EDITED_SINCE_IMPORT}</p>}
@@ -339,7 +342,7 @@ export function UpdateFromSourceDialog({ dashboard, origin, onClose, refuse, res
       </div>
 
       <div className={x.actions}>
-        {preview?.same ? (
+        {preview?.same || preview?.no_new_version ? (
           <button ref={closeRef} type="button" className={x.primary} onClick={() => onClose(false)}>Close</button>
         ) : (
           <>

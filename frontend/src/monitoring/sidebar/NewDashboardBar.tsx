@@ -40,7 +40,7 @@ export function NewDashboardBar({ owner, loaded, hasProjects, onNew, onImport }:
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.75 7 8 10.25 11.25 7M3 13.5h10" /></svg>
         </button>
       </div>
-      <p id={note} className={s.footNote} data-new-dashboard-note="">{line}</p>
+      <p id={note} className={s.footNote} data-new-dashboard-note="" title={owner && hasProjects && loaded ? `New dashboards go to ${owner.name}` : undefined}>{line}</p>
     </div>
   );
 }

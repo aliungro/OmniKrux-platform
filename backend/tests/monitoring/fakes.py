@@ -10,7 +10,11 @@ query string and a form body, headers). `mode` picks how a Prometheus or Loki an
 Seed `results` (exact query text -> the `data` object a query answers with; any other query gets
 an empty result of the right type), `errors` (exact query -> a `bad_data` error text, answered
 400), `labels`, `label_values`, `metadata` and `series` (the label sets `/api/v1/series` and
-`/loki/api/v1/series` answer with; Prometheus honours `limit`). `fail_paths` (path -> status)
+`/loki/api/v1/series` answer with; Prometheus honours `limit`). Opt-ins for tests that need time
+and filters honoured: a Prometheus's `label_values_from_series` reads label values from `series`
+under the `match[]` sent, and its `first_seen` leaves a metric out of `__name__` values asked up
+to an `end` before its first sample; a Loki's `stream_lines` holds streams with timed lines (see `FakeLoki`).
+`fail_paths` (path -> status)
 answers that status instead for one path. `require` makes a request without the matching
 credentials answer 401; `echo_auth_in_errors` makes error bodies repeat the request's
 `Authorization` header, for leak tests. With a `TlsMaterial` the server speaks HTTPS, and a
@@ -181,6 +185,11 @@ class FakePrometheus(_FakeTool):
     def __init__(self) -> None:
         super().__init__()
         self.rule_groups: list[dict] = []
+        # Opt-in: label values come from `series`, narrowed by the `match[]` selectors sent.
+        self.label_values_from_series = False
+        # Metric name -> the time (seconds) its first sample was written. A `__name__` values
+        # request with an `end` leaves out the metrics first written after it.
+        self.first_seen: dict[str, float] = {}
 
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
@@ -196,6 +205,10 @@ class FakePrometheus(_FakeTool):
             return self._query(params, self.empty_range)
         if path == "/api/v1/labels":
             return self._labels()
+        if (match := _LABEL_VALUES.match(path)) and self.label_values_from_series:
+            return self._values_in_series(match["name"], params)
+        if (match := _LABEL_VALUES.match(path)) and match["name"] == "__name__" and self.first_seen:
+            return self._names_up_to(params)
         if match := _LABEL_VALUES.match(path):
             return self._label_values(match["name"])
         if path == "/api/v1/metadata":
@@ -221,6 +234,24 @@ class FakePrometheus(_FakeTool):
         data = self.series[: int(limit)] if limit.isdigit() and int(limit) > 0 else self.series
         return web.json_response({"status": "success", "data": data})
 
+    def _names_up_to(self, params: dict[str, list[str]]) -> web.Response:
+        end = float((params.get("end") or ["inf"])[0])
+        names = [
+            n
+            for n in self.label_values.get("__name__", [])
+            if self.first_seen.get(n, float("-inf")) <= end
+        ]
+        return web.json_response({"status": "success", "data": names})
+
+    def _values_in_series(self, name: str, params: dict[str, list[str]]) -> web.Response:
+        tests = [_selector_test(text) for text in params.get("match[]", [])]
+        found = {
+            labels[name]
+            for labels in self.series
+            if name in labels and (not tests or any(test(labels) for test in tests))
+        }
+        return web.json_response({"status": "success", "data": sorted(found)})
+
 
 class FakeLoki(_FakeTool):
     version = "3.3.0"
@@ -235,6 +266,12 @@ class FakeLoki(_FakeTool):
         self.ruler_fail: int | None = None
         # The real ruler answers a list of rules, when it holds none, with a 404 and these words.
         self.ruler_empty_404 = False
+        # Opt-in: streams with their lines, as (labels, [(nanoseconds, line), ...]). When set,
+        # `/series` and `/labels` answer only the streams with a line between `start` and `end`
+        # (and `/series` only those its `match[]` selects), and a `query_range` of a bare
+        # selector not in `results` answers those streams' lines, honouring `limit` and
+        # `direction`.
+        self.stream_lines: list[tuple[dict[str, str], list[tuple[int, str]]]] = []
 
     def route(
         self, request: web.Request, params: dict[str, list[str]], headers: dict[str, str]
@@ -249,11 +286,25 @@ class FakeLoki(_FakeTool):
         if path == "/loki/api/v1/query":
             return self._query(params, self.empty_instant)
         if path == "/loki/api/v1/query_range":
+            query = (params.get("query") or [""])[0]
+            if self.stream_lines and query not in self.results and query not in self.errors:
+                return self._lines(query, params)
             return self._query(params, self.empty_range)
+        if path == "/loki/api/v1/labels" and self.stream_lines:
+            names = {name for labels, _ in self._in_window(params) for name in labels}
+            return web.json_response({"status": "success", "data": sorted(names)})
         if path == "/loki/api/v1/labels":
             return self._labels()
         if match := _LOKI_LABEL_VALUES.match(path):
             return self._label_values(match["name"])
+        if path == "/loki/api/v1/series" and self.stream_lines:
+            tests = [_selector_test(text) for text in params.get("match[]", [])]
+            data = [
+                labels
+                for labels, _ in self._in_window(params)
+                if not tests or any(test(labels) for test in tests)
+            ]
+            return web.json_response({"status": "success", "data": data})
         if path == "/loki/api/v1/series":
             return self._series(params)
         if path == "/loki/api/v1/rules":
@@ -267,6 +318,43 @@ class FakeLoki(_FakeTool):
         if (match := _RULER.match(path)) and self.ruler:
             return self._ruler(request, match["namespace"], match["group"])
         return web.Response(status=404, text="404 page not found")
+
+    def _in_window(
+        self, params: dict[str, list[str]]
+    ) -> list[tuple[dict[str, str], list[tuple[int, str]]]]:
+        """The streams with their lines between `start` and `end`, keeping only those lines."""
+        start = _loki_time((params.get("start") or [""])[0], 0)
+        end = _loki_time((params.get("end") or [""])[0], 2**63)
+        found = []
+        for labels, lines in self.stream_lines:
+            kept = [(at, text) for at, text in lines if start <= at <= end]
+            if kept:
+                found.append((labels, kept))
+        return found
+
+    def _lines(self, query: str, params: dict[str, list[str]]) -> web.Response:
+        if not (query.startswith("{") and query.endswith("}")):
+            return web.json_response({"status": "success", "data": self.empty_range})
+        test = _selector_test(query)
+        entries = [
+            (at, labels, text)
+            for labels, lines in self._in_window(params)
+            if test(labels)
+            for at, text in lines
+        ]
+        backward = (params.get("direction") or ["backward"])[0] == "backward"
+        entries.sort(key=lambda entry: entry[0], reverse=backward)
+        limit = (params.get("limit") or [""])[0]
+        if limit.isdigit():
+            entries = entries[: int(limit)]
+        streams: dict[str, dict] = {}
+        for at, labels, text in entries:
+            key = json.dumps(labels, sort_keys=True)
+            streams.setdefault(key, {"stream": labels, "values": []})["values"].append(
+                [str(at), text]
+            )
+        data = {"resultType": "streams", "result": list(streams.values())}
+        return web.json_response({"status": "success", "data": data})
 
     def _ruler(self, request: web.Request, namespace: str, group: str | None) -> web.Response:
         if request.method != "GET" and self.ruler_fail is not None:
@@ -421,6 +509,39 @@ def _parse_matcher(text: str):
         return re.fullmatch(value, actual) is None
 
     return test
+
+
+_SELECTOR_MATCHER = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _selector_test(text: str):
+    """A selector such as `{__name__="up",cluster="a"}` as a test over a label dict: every
+    matcher must hold (a missing label reads as empty, as in Prometheus and Loki)."""
+    found = _SELECTOR_MATCHER.findall(text)
+
+    def holds(labels: dict, name: str, operator: str, value: str) -> bool:
+        actual = labels.get(name, "")
+        value = value.replace('\\"', '"').replace("\\\\", "\\")
+        match operator:
+            case "=":
+                return actual == value
+            case "!=":
+                return actual != value
+            case "=~":
+                return re.fullmatch(value, actual) is not None
+        return re.fullmatch(value, actual) is None
+
+    return lambda labels: all(holds(labels, *matcher) for matcher in found)
+
+
+def _loki_time(text: str, default: int) -> int:
+    """A Loki `start`/`end` as nanoseconds: seconds with a fraction, whole seconds (up to 10
+    digits) or nanoseconds, as Loki reads them."""
+    if not text:
+        return default
+    if "." in text:
+        return int(float(text) * 1_000_000_000)
+    return int(text) * 1_000_000_000 if len(text) <= 10 else int(text)
 
 
 class FakeGrafana:

@@ -12,9 +12,11 @@ rules of the dashboard's panels are brought in line with what was saved (`AlertS
 answer says what that did in the tools (`alert_changes`); a delete leaves its panels' rules as
 page rules; a copy never copies an alert."""
 
+import asyncio
 import copy
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Literal
@@ -26,25 +28,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnikrux.monitoring.alerts.sync import AlertChangeOut
 from omnikrux.monitoring.audit import begin_change, finish_change
+from omnikrux.monitoring.dashboards.loki_labels import LokiFacts, read_loki_facts
+from omnikrux.monitoring.dashboards.prometheus_pick import (
+    PromLink,
+    check_needs,
+    chosen_prometheus_id,
+    pick_prometheus,
+    read_prometheus_links,
+)
 from omnikrux.monitoring.dashboards.ready_made import (
     DESCRIPTIONS,
-    NEED_METRIC,
-    NEED_NOTE,
-    NEEDS,
+    LOKI_VIEWS,
+    PROMETHEUS_VIEWS,
     TITLES,
     Need,
     ReadyKey,
     build_ready_made,
+    loki_notes,
     parse_ready_id,
     project_ready_keys,
     ready_id,
 )
 from omnikrux.monitoring.dashboards.schema import (
+    MAX_VARIABLE_VALUES,
     OwnerKind,
     adapt_sources,
     panel_count,
 )
 from omnikrux.monitoring.dashboards.store import (
+    MAX_TITLE,
     DashboardRecord,
     DashboardSummary,
     Origin,
@@ -74,16 +86,10 @@ from omnikrux.monitoring.dashboards.writes import (
 from omnikrux.monitoring.models import ContactPointRow, lock_first
 from omnikrux.monitoring.projects.types import Project, UnknownProject
 from omnikrux.monitoring.services import MonitoringServices
-from omnikrux.monitoring.sources.connector import QueryRejected
-from omnikrux.monitoring.sources.health import SECRETS_UNREADABLE
-from omnikrux.monitoring.sources.transport import SourceUnreachable
 from omnikrux.monitoring.sources.types import NameTaken, SourceConfig
 
 VERSION_GONE = "That version of the dashboard no longer exists."
 NOT_REMOVED = "The dashboard couldn't be removed. Try again."
-CANT_READ_ALL = "OmniKrux couldn't read every metric name, so it can't tell what's missing."
-# Metric names read to tell which exporters report; well past a large Prometheus.
-NAME_LIMIT = 100_000
 
 # What a body of the wrong shape is told, by field. Never the value sent.
 NOT_JSON = "The request body isn't valid JSON. Correct it and try again."
@@ -155,9 +161,13 @@ class VersionDetailOut(BaseModel):
 
 
 class ReadyMadeOut(BaseModel):
-    """A ready-made view of a project and what its data lacks. `checked` is False when the
-    metric names couldn't be read (`check_message` says why); `missing` and `notes` are then
-    empty, never guessed."""
+    """A ready-made view of a project and what its data lacks. A Prometheus view reads
+    `source_name` (`pick_prometheus`); its `checked` is False when that link, or another that
+    might hold what it lacks, couldn't be read (`check_message` says why; `check_needs`), and
+    `missing` and the notes about exporters are then empty, never guessed. For the Logs
+    overview, `source_name` is None and `checked` is False when the Loki's labels couldn't be
+    read, and its note says why (`check_message` stays None, so the reason isn't said twice).
+    Pod health's notes also say what its Logs panel's labels lack (`loki_notes`)."""
 
     key: ReadyKey
     id: str
@@ -167,6 +177,7 @@ class ReadyMadeOut(BaseModel):
     notes: list[str]
     checked: bool
     check_message: str | None
+    source_name: str | None
 
 
 class _Body(BaseModel):
@@ -197,6 +208,9 @@ class DashboardCopyIn(_Body):
     owner_kind: OwnerKind
     owner_id: str
     title: str | None = None
+    # The copy's variables start here (unknown names ignored; a value the variable can't take is
+    # ignored too, and the variable keeps its own default).
+    defaults: dict[str, Literal["all"] | list[str]] | None = None
 
 
 # --- Helpers -----------------------------------------------------------------------------------
@@ -298,7 +312,19 @@ async def _ready_document(services: MonitoringServices, id: str) -> tuple[Projec
     types = {c.id: c.type for c in configs}
     if key not in project_ready_keys(project, types):
         raise dashboard_gone()
-    doc = build_ready_made(key, kind=project.kind, has_loki="loki" in types.values())
+    has_loki = "loki" in types.values()
+
+    async def loki_facts() -> LokiFacts | None:
+        if not has_loki or key not in LOKI_VIEWS:
+            return None
+        return await read_loki_facts(services, project, configs, time.time())
+
+    loki, prometheus_id = await asyncio.gather(
+        loki_facts(), chosen_prometheus_id(services, project, configs, key)
+    )
+    doc = build_ready_made(
+        key, kind=project.kind, has_loki=has_loki, loki=loki, prometheus_id=prometheus_id
+    )
     return project, key, doc
 
 
@@ -489,6 +515,30 @@ async def add_dashboard(request: Request) -> DashboardOut:
     return _out(created, owner_name, changes)
 
 
+COPY_SUFFIX = " (copy)"
+
+
+def _apply_defaults(spec: dict, defaults: dict[str, str | list[str]] | None) -> None:
+    """Start the copy's variables at `defaults`, each only when the variable can take it."""
+    for variable in spec.get("variables", []):
+        if (
+            not isinstance(variable, dict)
+            or defaults is None
+            or variable.get("name") not in defaults
+        ):
+            continue
+        value = defaults[variable["name"]]
+        if value == "all":
+            if variable.get("includeAll") is True:
+                variable["default"] = "all"
+        elif (
+            isinstance(value, list)
+            and len(value) <= MAX_VARIABLE_VALUES
+            and (len(value) <= 1 or variable.get("multi") is True)
+        ):
+            variable["default"] = list(value)
+
+
 @router.post("/dashboards/copy", status_code=201, openapi_extra=_schema(DashboardCopyIn))
 async def copy_dashboard(request: Request) -> DashboardOut:
     """A copy of a dashboard for any owner, with the sources that owner can't use set to its own
@@ -500,7 +550,11 @@ async def copy_dashboard(request: Request) -> DashboardOut:
         source_title, base = spec["title"], spec["title"]  # a ready-made view isn't "a copy"
     else:
         source = await dashboard_record(services, body.from_id)
-        spec, source_title, base = source.spec, source.title, f"{source.title} (copy)"
+        spec, source_title, base = (
+            source.spec,
+            source.title,
+            f"{source.title[: MAX_TITLE - len(COPY_SUFFIX)].rstrip()}{COPY_SUFFIX}",
+        )
     owner = await owner_of(services, body.owner_kind, body.owner_id)
     if body.title is not None:
         title = body.title
@@ -510,6 +564,7 @@ async def copy_dashboard(request: Request) -> DashboardOut:
     for panel in adapted.get("panels", []):
         if isinstance(panel, dict):
             panel["alert"] = None  # an alert is its panel's alone: a copy starts without one
+    _apply_defaults(adapted, body.defaults)
     created, changes = await create_dashboard_audited(
         request,
         owner_kind=owner.kind,
@@ -672,50 +727,58 @@ async def restore_version(id: str, v: str, request: Request) -> DashboardOut:
 
 @router.get("/projects/{id}/ready-made")
 async def ready_made_views(id: str, request: Request) -> list[ReadyMadeOut]:
-    """The project's ready-made views, each with what its data lacks. The metric names are read
-    once, from the project's first Prometheus source with that link's filter."""
+    """The project's ready-made views, each with what its data lacks. Every Prometheus link is
+    read once (`read_prometheus_links`), only when a Prometheus view is listed; the Loki labels
+    likewise, from its first Loki link, when a view that uses them is listed. All are read at
+    once."""
     services = _services(request)
     project = await _ready_project(services, id)
     configs = await _source_configs(services, project)
     keys = project_ready_keys(project, {c.id: c.type for c in configs})
     if not keys:
         return []
-    names, message = await _metric_names(services, project, configs)
+
+    async def prometheus_links() -> list[PromLink]:
+        if not any(key in PROMETHEUS_VIEWS for key in keys):
+            return []
+        return await read_prometheus_links(services, project, configs)
+
+    async def loki_facts() -> LokiFacts | None:
+        if not any(key in LOKI_VIEWS for key in keys):
+            return None
+        return await read_loki_facts(services, project, configs, time.time())
+
+    links, loki = await asyncio.gather(prometheus_links(), loki_facts())
     views = []
     for key in keys:
-        missing: list[Need] = []
-        if names is not None:
-            missing = [n for n in NEEDS[key] if NEED_METRIC[n] not in names]
+        common = {
+            "key": key,
+            "id": ready_id(project.id, key),
+            "title": TITLES[key],
+            "description": DESCRIPTIONS[key],
+        }
+        chosen = pick_prometheus(key, links) if key in PROMETHEUS_VIEWS else None
+        if chosen is None:
+            views.append(
+                ReadyMadeOut(
+                    **common,
+                    missing=[],
+                    notes=loki_notes(key, loki),
+                    checked=loki is not None and loki.labels is not None,
+                    check_message=None,
+                    source_name=None,
+                )
+            )
+            continue
+        check = check_needs(key, chosen, links)
         views.append(
             ReadyMadeOut(
-                key=key,
-                id=ready_id(project.id, key),
-                title=TITLES[key],
-                description=DESCRIPTIONS[key],
-                missing=missing,
-                notes=[NEED_NOTE[n] for n in missing],
-                checked=names is not None,
-                check_message=message,
+                **common,
+                missing=check.missing,
+                notes=check.notes + loki_notes(key, loki),
+                checked=check.checked,
+                check_message=check.message,
+                source_name=chosen.source_name,
             )
         )
     return views
-
-
-async def _metric_names(
-    services: MonitoringServices, project: Project, configs: list[SourceConfig]
-) -> tuple[set[str] | None, str | None]:
-    """(every metric name, None), or (None, why they couldn't be read)."""
-    source = next(c for c in configs if c.type == "prometheus")
-    link = next(link for link in project.links if link.source_id == source.id)
-    if source.secrets_unreadable:
-        return None, SECRETS_UNREADABLE
-    connector = services.connectors.get(source.type)
-    try:
-        catalog = await connector.describe_fields(
-            services.transports.for_source(source), matchers=link.matchers, limit=NAME_LIMIT
-        )
-    except (SourceUnreachable, QueryRejected) as exc:
-        return None, exc.message
-    if catalog.truncated:  # never say "isn't reporting" about names that weren't all read
-        return None, CANT_READ_ALL
-    return {m.name for m in catalog.metrics}, None

@@ -1,12 +1,13 @@
 // The selected panel's settings beside the grid (E2): Query, Chart, Options and Alert. Every change
 // goes into the draft at once (`updatePanel`), so the JSON and the panel agree; the panel's frame
-// redraws in place, and its queries run once the typing stops (D1).
-import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+// redraws in place, and its queries run once the typing stops (D1). The settings end with Duplicate
+// panel and Remove panel (the grid does both, and says where the keyboard goes).
+import { useCallback, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ALERT_PANEL_TYPES } from "../../alerts/limits";
 import { RecommendationBar } from "../../build/RecommendationBar";
 import { useOwnerCatalog } from "../../catalog/merge";
 import { escapeCloses } from "../../focus";
-import type { DashboardOwner, PanelData } from "../runPanel";
+import type { DashboardOwner, PanelData, PanelRun } from "../runPanel";
 import type { OwnerKind, PanelSpec, Problem } from "../schema";
 import { AlertTab, alertRunKey, type AlertDryRun } from "./AlertTab";
 import { ChartTab } from "./ChartTab";
@@ -28,6 +29,8 @@ export interface PanelLive {
   flush(): void;
   /** The step the run used, in seconds; null when the panel has no run. */
   step: number | null;
+  /** The run itself (what an empty answer is asked about); null or absent when the panel has no run. */
+  run?: PanelRun | null;
 }
 
 /** Changes one panel of the draft; `update` gets the panel as the draft has it. */
@@ -46,10 +49,11 @@ export interface SidePanelProps {
   /** The panel's run besides its data: running, waiting for the typing to stop, Run now. */
   live?: Omit<PanelLive, "data"> | null;
   /**
-   * Where the keyboard goes when it opens: the active tab, the first query, the Alert tab's first
+   * Where the keyboard goes when it opens: the active tab, the first field (a text field, else any
+   * control, else the tab), the first query, the Alert tab's first
    * field with a problem (else Threshold, else Add an alert), or nowhere (a click).
    */
-  initialFocus?: "tab" | "query" | "alert" | "none";
+  initialFocus?: "tab" | "field" | "query" | "alert" | "none";
   /** Changes with each opening, so the keyboard goes there again. */
   seq?: number;
   onClose(): void;
@@ -57,15 +61,69 @@ export interface SidePanelProps {
   saveProblems?: readonly Problem[];
   /** Opens the Alerts page on a rule (a new workspace tab with Ctrl). */
   onOpenRule?(ruleId: string, newTab: boolean): void;
+  /** Duplicate panel and Remove panel at the end of the settings. */
+  onDuplicate?(): void;
+  onRemove?(): void;
+}
+
+/**
+ * The settings as a sheet: from below the dashboard header to the bottom of the page area (the
+ * Monitoring page's scroll area, not the window), so the header's Discard and Save stay in view and
+ * the last line is never under the status bar. Written as `--sheet-top` (the header's height, where
+ * the sticky settings stop) and `--sheet-h` (from where the settings show to the page's bottom);
+ * the stylesheet uses them only in the settings overlay (the wide column keeps its own limits).
+ * Placed again, once a frame, on scrolls and resizes of the page or its header.
+ */
+function useSheet(side: RefObject<HTMLElement | null>, shown: boolean) {
+  useLayoutEffect(() => {
+    const el = side.current;
+    const page = el?.closest<HTMLElement>("[data-monitoring-page]");
+    if (!el || !page) return;
+    const header = () => page.querySelector<HTMLElement>(":scope > section > header");
+    const place = () => {
+      const area = page.getBoundingClientRect();
+      const head = header();
+      const below = head ? head.getBoundingClientRect().bottom : area.top;
+      const from = Math.max(el.getBoundingClientRect().top, below);
+      el.style.setProperty("--sheet-top", `${Math.max(0, Math.round(below - area.top))}px`);
+      el.style.setProperty("--sheet-h", `${Math.max(0, Math.round(area.bottom - from))}px`);
+    };
+    place();
+    // At most once a frame: each placing reads three boxes.
+    let frame: number | null = null;
+    const later = () => {
+      if (typeof requestAnimationFrame !== "function") return place();
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    };
+    page.addEventListener("scroll", later, { passive: true });
+    window.addEventListener("resize", later);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(later);
+    ro?.observe(page);
+    const head = header();
+    if (head) ro?.observe(head);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      page.removeEventListener("scroll", later);
+      window.removeEventListener("resize", later);
+      ro?.disconnect();
+    };
+  }, [side, shown]);
 }
 
 export function SidePanel({
   state, dispatch, owner, ownerKind, panelData, live = null, initialFocus = "tab", seq = 0, onClose, saveProblems, onOpenRule,
+  onDuplicate, onRemove,
 }: SidePanelProps) {
   const base = useId();
   const tabs = useRef<Partial<Record<SideTab, HTMLButtonElement | null>>>({});
   const body = useRef<HTMLDivElement>(null);
+  const side = useRef<HTMLElement>(null);
   const panel = state.draft.panels.find((p) => p.id === state.selected);
+  useSheet(side, panel !== undefined);
   const tab = state.sideTab;
   const { catalog } = useOwnerCatalog(owner);
 
@@ -94,7 +152,11 @@ export function SidePanel({
 
   useLayoutEffect(() => {
     if (initialFocus === "query") body.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-    else if (initialFocus === "alert") (alertFocus.current ?? (() => tabs.current[tab]?.focus()))();
+    else if (initialFocus === "field") {
+      const fields = (sel: string) => body.current?.querySelector<HTMLElement>(sel);
+      (fields("textarea, input:not([type=checkbox], [type=radio], [type=hidden]):not(:disabled)") ?? fields("select:not(:disabled)")
+        ?? tabs.current[tab])?.focus();
+    } else if (initialFocus === "alert") (alertFocus.current ?? (() => tabs.current[tab]?.focus()))();
     else if (initialFocus === "tab") tabs.current[tab]?.focus();
     // Only on opening (not on `tab`): a tab change moves the keyboard itself.
   }, [initialFocus, seq]);
@@ -121,7 +183,7 @@ export function SidePanel({
     update(apply);
   };
   return (
-    <aside className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
+    <aside ref={side} className={s.side} aria-label="Panel settings" onKeyDown={escapeCloses(onClose)}>
       <div className={s.head}>
         <h2 className={s.title}>{panelName(panel)}</h2>
         <button type="button" className={s.close} aria-label="Close panel settings" onClick={onClose}>
@@ -144,7 +206,8 @@ export function SidePanel({
       <div ref={body} id={`${base}-panel`} role="tabpanel" aria-labelledby={`${base}-tab-${tab}`}
         tabIndex={tab === "alert" && !ALERT_PANEL_TYPES.includes(panel.type) ? 0 : undefined} className={s.body}>
         {tab === "query" && (
-          <QueryTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} data={panelData} live={live} />
+          <QueryTab panel={panel} update={update} owner={owner} ownerKind={ownerKind} data={panelData} live={live}
+            jsonPending={state.jsonText !== null} />
         )}
         {tab === "chart" && <ChartTab panel={panel} update={update} onRunNow={live?.flush} />}
         {tab === "options" && <OptionsTab panel={panel} update={update} />}
@@ -155,6 +218,12 @@ export function SidePanel({
             thresholdText={state.alertText?.[id]} onThresholdText={(text) => dispatch({ type: "alertText", id, text })} />
         )}
       </div>
+      {(onDuplicate || onRemove) && (
+        <div className={s.foot}>
+          {onDuplicate && <button type="button" className={s.footAction} onClick={onDuplicate}>Duplicate panel</button>}
+          {onRemove && <button type="button" className={s.footAction} data-danger="" onClick={onRemove}>Remove panel</button>}
+        </div>
+      )}
     </aside>
   );
 }

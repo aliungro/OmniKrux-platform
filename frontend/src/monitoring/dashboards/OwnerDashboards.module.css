@@ -193,6 +193,14 @@
   color: var(--warn);
 }
 
+/* Which Prometheus a view reads: a quiet fact under its description. */
+.reads {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
 .copy {
   flex: none;
   padding: 5px 10px;

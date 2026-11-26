@@ -184,7 +184,11 @@ export interface EngineOut {
 }
 
 export interface OverviewOut {
-  counts: { rules: number; firing: number; pending: number; cant_check: number; not_applied: number };
+  counts: {
+    rules: number; firing: number; pending: number; cant_check: number; not_applied: number;
+    /** Rules firing where a silence doesn't mute every firing alert: what the badges count (read `firing` when absent). */
+    firing_unsilenced?: number;
+  };
   firing: FiringOut[];
   by_project: Record<string, number>;
   by_group: Record<string, number>;
@@ -294,6 +298,8 @@ export interface DryRunOut {
   step: number;
   fired: number;
   firing_now: boolean;
+  /** Not firing now, but the condition holds at the last point: its `for` hasn't passed yet. */
+  holding_now?: boolean;
   periods: PeriodOut[];
   projects: DryRunProjectOut[];
   candidates: { threshold: number; fired: number }[];
@@ -327,6 +333,8 @@ export interface ContactPointOut {
   summary: string;
   used_by: RuleRefOut[];
   last_delivery: { at: string; ok: boolean; message: string | null } | null;
+  /** What is wrong with the stored address, in words (a Slack address that isn't Slack's); it still sends. */
+  problem?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -375,10 +383,21 @@ export interface SilenceOut {
   affects: number | null;
 }
 
+/** The rules the badges count: firing, and not every firing alert silenced. */
+export const loudFiring = (counts: OverviewOut["counts"]): number => counts.firing_unsilenced ?? counts.firing;
+
+/** An Alertmanager that couldn't be read, in words; `unreachable`: it didn't answer at all. */
+export interface SilenceProblemOut {
+  source_id: string;
+  source_name: string;
+  message: string;
+  unreachable: boolean;
+}
+
 export interface SilencesOut {
   silences: SilenceOut[];
-  /** An Alertmanager that couldn't be read, in words; it never hides the others. */
-  problems: { source_name: string; message: string }[];
+  /** Alertmanagers that couldn't be read; they never hide the others. */
+  problems: SilenceProblemOut[];
 }
 
 export interface SilencePreviewOut {
@@ -389,10 +408,10 @@ export interface SilencePreviewOut {
 // --- Errors -----------------------------------------------------------------------------------
 
 export type RuleErrorCode = "invalid_rule" | "rule_changed" | "not_found" | "unknown_scope" | "panel_rule" | "tool_rule";
-export type AlertErrorCode = RuleErrorCode | DashboardErrorCode | QueryErrorCode | "invalid_silence" | "network";
+export type AlertErrorCode = RuleErrorCode | DashboardErrorCode | QueryErrorCode | "invalid_silence" | "still_active" | "network";
 
 const CODES: readonly AlertErrorCode[] = [
-  "invalid_rule", "rule_changed", "not_found", "unknown_scope", "panel_rule", "tool_rule", "invalid_silence",
+  "invalid_rule", "rule_changed", "not_found", "unknown_scope", "panel_rule", "tool_rule", "invalid_silence", "still_active",
   "invalid_dashboard", "version_conflict", "name_taken", "unknown_owner", "read_only", "bad_request",
   "not_linked", "bad_query", "unreachable", "timeout", "unauthorized", "too_large", "tool_error",
 ];
@@ -557,6 +576,8 @@ export const createSilence = (body: SilenceIn) => request<SilenceOut>("POST", "/
 /** Ends it now; an Alertmanager's silence needs its `sourceId`. */
 export const expireSilence = (kind: "omnikrux" | "alertmanager", id: string, sourceId?: string | null) =>
   request<void>("DELETE", `/silences/${enc(kind)}/${enc(id)}${sourceId ? `?source_id=${enc(sourceId)}` : ""}`);
+/** Takes an OmniKrux silence that has ended off the list (409 `still_active` while it hasn't). */
+export const removeExpiredSilence = (id: string) => request<void>("DELETE", `/silences/omnikrux/${enc(id)}?expired=1`);
 
 // --- Hooks ------------------------------------------------------------------------------------
 

@@ -1,7 +1,9 @@
 """The notifier: one grouped message per rule and check, repeats, silences, failed and slow
 deliveries, and incident keys that pair up."""
 
-from omnikrux.monitoring.alerts.notify import REPEAT_SECONDS, dedup_key
+from omnikrux.monitoring.alerts.contact_points.senders import email_message
+from omnikrux.monitoring.alerts.contact_points.types import ContactPoint, Notice
+from omnikrux.monitoring.alerts.notify import REPEAT_SECONDS, Notifier, dedup_key
 from omnikrux.monitoring.projects.types import Matcher
 from tests.monitoring.alert_env import HOUR, MIN, NAME, SENT, T0, until, vector
 
@@ -219,3 +221,40 @@ async def test_silence_ends_while_it_still_fires(engine_env):
     assert statuses(env) == ["firing", "resolved", "firing"]
     [alert] = env.webhook.bodies()[-1]["alerts"]
     assert alert["labels"]["route"] == "/a"
+
+
+async def test_alert_email_leaves_out_the_rule_id(engine_env):
+    env = engine_env
+    env.prom.results[SENT] = vector(({"route": "/a"}, 0.4))
+    rule, _ = await env.add_rule(for_seconds=0)
+    await env.tick(T0)
+    [instance] = await env.instances(rule)
+    assert instance.labels["omnikrux_rule"] == rule.id
+    notice = Notice(
+        kind="firing",
+        rule_name=rule.name,
+        project_name="Shop",
+        severity="warning",
+        summary="1 firing (above 0.3).",
+        instances=(Notifier._instance(rule, instance, None),),
+        link_hint=None,
+        dedup_key="k",
+    )
+    mail = ContactPoint(
+        id="cp-mail",
+        name="Mail",
+        type="email",
+        settings={"from_address": "alerts@example.test", "to": ["ops@example.test"]},
+        secrets={},
+        last_delivery_at=None,
+        last_delivery_ok=None,
+        last_delivery_message=None,
+        created_at=T0,
+        updated_at=T0,
+    )
+    text = email_message(mail, notice).get_content()
+    assert "omnikrux_rule" not in text and rule.id not in text
+    assert "route=/a" in text and "alertname=" in text
+    # The webhook's JSON keeps every label: a receiver may route on the rule's id.
+    [body] = env.webhook.bodies()
+    assert body["alerts"][0]["labels"]["omnikrux_rule"] == rule.id

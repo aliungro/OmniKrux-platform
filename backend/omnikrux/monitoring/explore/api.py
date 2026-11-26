@@ -16,6 +16,7 @@ from omnikrux.monitoring.explore.catalog import (
 )
 from omnikrux.monitoring.projects.types import UnknownProject
 from omnikrux.monitoring.query.run import PROJECT_GONE
+from omnikrux.monitoring.sources.connector import DEFAULT_LIMITS
 from omnikrux.monitoring.sources.types import SourceType
 
 REFRESH_CHOICE = "Use refresh=true or refresh=false."
@@ -51,6 +52,8 @@ class SourceCatalogOut(BaseModel):
     labels: list[str]
     streams: list[StreamLabelOut]
     notes: list[str]
+    # How far back a Loki's streams were read (seconds); None for any other source.
+    stream_window_seconds: int | None
 
 
 class CatalogOut(BaseModel):
@@ -97,6 +100,11 @@ def _source_out(entry: CatalogEntry) -> SourceCatalogOut:
             for s in (catalog.streams if catalog else ())
         ],
         notes=list(catalog.notes) if catalog else [],
+        stream_window_seconds=(
+            DEFAULT_LIMITS.stream_window
+            if entry.source_type == "loki" and entry.state == "ok"
+            else None
+        ),
     )
 
 

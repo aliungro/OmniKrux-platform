@@ -71,7 +71,12 @@ function KubePane({ tab, title, history, active, split, zoneActive, onFocusPane,
 
 const AuditView = lazy(() => import("../audit/AuditView").then(m => ({ default: m.AuditView })));
 const SettingsView = lazy(() => import("../settings/SettingsView").then(m => ({ default: m.SettingsView })));
+/** Monitoring's empty-dock words (a literal here: no Monitoring module joins the initial graph). */
+export const MONITORING_DOCK_HINT = "Press ? to see all keys.";
 const MonitoringApp = lazy(() => import("../../monitoring/MonitoringApp"));
+/** In Monitoring, Ctrl K and the top bar's box go to its Find (MonitoringApp listens; the same literal there). */
+const findInMonitoring = () => window.dispatchEvent(new Event("omnikrux:monitoring-find"));
+const MONITORING_FIND_BOX = { hint: "projects, dashboards, sources…", label: "Find in Monitoring", prompt: "/", keys: "/ Control+K" };
 
 export function Shell() {
   const client = useQueryClient();
@@ -214,7 +219,11 @@ export function Shell() {
     main.current?.focus({ preventScroll: true });
   };
 
-  usePaletteKeys(setPalette);
+  // In Monitoring, Ctrl K is its Find and ":" (kinds) does nothing.
+  usePaletteKeys((mode) => {
+    if (!monitoring) setPalette(mode);
+    else if (mode === "all") findInMonitoring();
+  });
   const onKey = useEffectEvent((e: KeyboardEvent) => {
     if (!pageKey(e)) return;
     const app = appForKey(e);
@@ -260,7 +269,8 @@ export function Shell() {
         <Rail app={ws.app} onSelect={switchApp} />
         <div className={s.content}>
           <TopBar appName={APPS.find((a) => a.id === ws.app)?.title} clusters={activeScope}
-            nav={kube ? nav : monitoring ? monitoringNav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk} />} onPalette={() => setPalette("all")} />
+            nav={kube ? nav : monitoring ? monitoringNav : undefined} forwards={<ForwardsMenu openRequest={forwardsAsk} />}
+            onPalette={monitoring ? findInMonitoring : () => setPalette("all")} {...(monitoring && MONITORING_FIND_BOX)} />
           {!monitoring && <WorkspaceTabs app={ws.app} tabs={tabs} active={activeId} clusters={clusters} kinds={kinds}
             onActivate={activateTab} onClose={closeTab} onNew={newTab} onEditPinned={editPinned} onSplit={splitTab}
             onOpenSplit={view => openView(view, true)} split={ws.split} />}
@@ -294,7 +304,7 @@ export function Shell() {
             )}
           </main>
           {/* A shell is in the dock: the dock keeps its outline, the bar says how to leave the terminal. */}
-          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} onFocusWorkspace={focusWorkspaceFromDock} />
+          <Dock ref={dockRef} dock={dock} zoneActive={zone === "logs" || zone === "shell"} emptyHint={monitoring ? MONITORING_DOCK_HINT : undefined} onFocusWorkspace={focusWorkspaceFromDock} />
           {(kind || zone === "logs" || zone === "shell") && <ShortcutBar kind={kind} zone={zone ?? "table"} onOpen={() => setHelp(true)} />}
         </div>
       </div>

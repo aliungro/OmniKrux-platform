@@ -85,6 +85,51 @@
   white-space: nowrap;
 }
 
+/* Edit mode: the title is a field inside the heading, drawn like it. A faint dashed rule says it
+   can be typed in; it firms up on hover and focus. */
+.title[data-editing] {
+  overflow: visible;
+}
+
+.titleInput {
+  max-width: min(100%, 640px);
+  min-width: min(8ch, 100%);
+  field-sizing: content; /* as wide as the title, where supported; elsewhere its `size` */
+  margin: -2px -6px;
+  padding: 1px 5px;
+  border: 1px dashed color-mix(in srgb, var(--ink-3) 45%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+.titleInput:hover {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+}
+
+.titleInput:focus-visible {
+  border-style: solid;
+  border-color: var(--focus);
+  outline: 2px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.titleInput[aria-invalid="true"] {
+  border-style: solid;
+  border-color: var(--bad);
+}
+
+/* Why the title can't stay as typed: on its own row, under the title. */
+.titleProblem {
+  flex-basis: 100%;
+  margin: -4px 0 0;
+  color: var(--bad);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .readyTag {
   flex: none;
   align-self: center;
@@ -134,6 +179,78 @@
   gap: 8px;
 }
 
+/* The header always wraps, so a full-row child (an offered draft's banner, the title's problem)
+   keeps its own row and nothing leaves the right edge. From 1100 px the heading asks for at least
+   14rem and takes what is left, so the title, tabs and controls (time range, refresh, Edit, More)
+   share one row when they fit; when they don't, the controls drop to the next row (and wrap inside
+   it) instead. After the base `.controls` rule, so its gap is the one used. */
+@media (min-width: 1100px) {
+  .heading {
+    flex: 1 1 14rem;
+    min-width: 0;
+  }
+
+  .heading > h1 {
+    flex: 0 1 auto;
+  }
+
+  .tabs {
+    flex: none;
+  }
+
+  .controls {
+    flex: 0 1 auto;
+    max-width: 100%;
+    gap: 6px;
+  }
+
+  /* Edit mode has five more controls (Undo, Variables, Suggestions, Discard, Save dashboard), and
+     they come right after the title in the page too, so the keyboard meets them before the views.
+     Row 1: the title (at least 14rem) and the controls (they wrap inside their column rather than
+     leave the edge); then the title's problem and the views, each on a row of its own. */
+  .header[data-editing] {
+    display: grid;
+    grid-template-columns: minmax(min(14rem, 100%), 1fr) auto;
+  }
+
+  .header[data-editing] > * {
+    grid-column: 1 / -1;
+  }
+
+  .header[data-editing] > .heading {
+    grid-column: 1;
+  }
+
+  .header[data-editing] > .controls {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    justify-content: flex-end;
+  }
+
+  .header[data-editing] > .tabs {
+    justify-self: start;
+  }
+
+  .header[data-editing] > .controls > button {
+    padding-inline: 8px;
+  }
+}
+
+/* Edit mode: the owner gives way first (cut with an ellipsis; its title has all of it), so the
+   title being typed keeps its room. */
+.header[data-editing] .crumb {
+  flex: 0 100 auto;
+  min-width: 6ch; /* the owner's 4ch, the gap and the slash */
+}
+
+.header[data-editing] .owner {
+  min-width: 4ch; /* never cut to nothing: a few letters and the ellipsis stay */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -151,6 +268,23 @@
 .chip[aria-expanded="true"] {
   border-color: color-mix(in srgb, var(--focus) 60%, var(--rule));
   color: var(--ink);
+}
+
+/* The range in words, cut with an ellipsis (its title has all of it) before it can widen the header. */
+.chipText {
+  min-width: 0;
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.formats {
+  max-width: 260px;
+  margin: 0 0 2px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 
 .chipIcon {
@@ -204,6 +338,11 @@
   color: var(--ink-2);
   font: 11.5px/1.4 "Geist Mono", ui-monospace, monospace;
   cursor: pointer;
+}
+
+.refreshEvery:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
 }
 
 .refreshEvery option {
@@ -460,6 +599,25 @@
   line-height: 1.5;
 }
 
+/* "Saved …": a quiet word for four seconds after a save. */
+.saved {
+  margin: 8px 16px 0;
+  padding: 7px 12px;
+  border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.saved:empty {
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  background: none;
+}
+
 .arrived:empty {
   margin: 0;
   padding: 0;
@@ -664,4 +822,17 @@
   .updated {
     padding: 7px 12px 0;
   }
+}
+
+/* What Undo did, said to screen readers only (the page shows the change itself). */
+.said {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

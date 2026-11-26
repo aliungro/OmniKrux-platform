@@ -14,10 +14,14 @@ export function useCloseOutside(open: boolean, root: RefObject<HTMLElement | nul
   }, [open, root, onClose]);
 }
 
-/** The keyboard left `root` for somewhere else on the page (Tab away): close without taking it back. */
-export function closesOnLeave(onClose: () => void) {
+/** The keyboard left the popup for somewhere else on the page (Tab away): close without taking it back.
+ * Moving to anything inside `root` (the trigger) doesn't close: the trigger's own click does that,
+ * so a second click on it closes the menu instead of reopening it. */
+export function closesOnLeave(onClose: () => void, root?: RefObject<HTMLElement | null>) {
   return (e: FocusEvent<HTMLElement>) => {
-    if (e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) onClose();
+    const to = e.relatedTarget;
+    if (!(to instanceof Node) || e.currentTarget.contains(to) || root?.current?.contains(to)) return;
+    onClose();
   };
 }
 

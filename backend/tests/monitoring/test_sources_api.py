@@ -3,6 +3,7 @@ delete reviews and the per-project field catalog."""
 
 import logging
 import socket
+import time
 
 from cryptography.fernet import Fernet
 
@@ -435,3 +436,138 @@ async def test_undecryptable_source_needs_every_secret_again(monitoring_app, fak
     # Nothing was changed: the source still asks for its credentials.
     listed = (await http.get(BASE)).json()[0]
     assert listed["health"]["message"] == SECRETS_UNREADABLE
+
+
+async def make_source(http, url: str, type: str = "prometheus") -> str:
+    response = await http.post(BASE, json={"type": type, "reach": "url", "url": url})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+async def test_filter_check_says_when_nothing_matches(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.label_values_from_series = True
+    fake_prometheus.series = [{"__name__": "up", "namespace": "shop"}]
+    source_id = await make_source(http, fake_prometheus.url)
+    url = f"{BASE}/{source_id}/filter-check"
+
+    none = await http.post(url, json={"filter": 'namespace="nope-ns"'})
+    assert none.status_code == 200, none.text
+    assert none.json() == {"matches": False, "message": None}
+    asked = [r for r in fake_prometheus.requests if r.path == "/api/v1/label/__name__/values"]
+    assert asked[-1].params["match[]"] == ['{namespace="nope-ns"}']
+
+    some = await http.post(url, json={"filter": 'namespace="shop"'})
+    assert some.json() == {"matches": True, "message": None}
+
+    fake_prometheus.requests.clear()
+    empty = await http.post(url, json={"filter": "  "})
+    assert empty.json() == {"matches": True, "message": None}
+    assert fake_prometheus.requests == []
+
+
+async def test_filter_check_on_loki_reads_seven_days(monitoring_app, fake_loki):
+    http, _ = monitoring_app
+    fake_loki.series = [{"namespace": "shop", "job": "shop/api"}]
+    source_id = await make_source(http, fake_loki.url, "loki")
+    before = time.time()
+
+    found = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+
+    assert found.json() == {"matches": True, "message": None}
+    series = next(r for r in fake_loki.requests if r.path == "/loki/api/v1/series")
+    assert series.params["match[]"] == ['{job="x"}']
+    start, end = int(series.params["start"][0]) / 1e9, int(series.params["end"][0]) / 1e9
+    assert abs((end - start) - 7 * 86400) < 1
+    assert before - 5 < end < time.time() + 5
+
+    fake_loki.series = []
+    nothing = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+    assert nothing.json() == {"matches": False, "message": None}
+
+
+async def test_filter_check_reports_an_unreachable_source(monitoring_app):
+    http, _ = monitoring_app
+    source_id = await make_source(http, closed_port_url())
+
+    answer = await http.post(f"{BASE}/{source_id}/filter-check", json={"filter": 'job="x"'})
+
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["matches"] is None and "Can't reach" in body["message"]
+
+
+async def test_filter_check_refuses_a_bad_filter(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    source_id = await make_source(http, fake_prometheus.url)
+    url = f"{BASE}/{source_id}/filter-check"
+
+    refused = await http.post(url, json={"filter": "cluster=prod"})
+    assert refused.status_code == 422
+    assert refused.json()["detail"].startswith("Use label matchers")
+    too_long = await http.post(url, json={"filter": 'a="' + "x" * 2000 + '"'})
+    assert too_long.status_code == 422
+    gone = await http.post(f"{BASE}/nope/filter-check", json={"filter": 'a="b"'})
+    assert gone.status_code == 404
+    cross = await http.post(url, json={"filter": 'a="b"'}, headers={"Origin": "http://evil.test"})
+    assert cross.status_code in (403, 400)
+    assert [r for r in fake_prometheus.requests if "label" in r.path] == []
+
+
+NO_PROMETHEUS_PATHS = {"/api/v1/status/buildinfo": 404, "/api/v1/query": 404}
+
+
+async def test_a_404_answer_is_not_an_api(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    entered = {"type": "prometheus", "reach": "url", "url": fake_prometheus.url, "name": "Metrics"}
+    body = (await http.post(f"{BASE}/test", json=entered)).json()
+    assert body["ok"] is False
+    assert body["message"] == (
+        "Metrics answered, but not as a Prometheus API (HTTP 404). Check the address and the type."
+    )
+    fake_prometheus.fail_paths.clear()
+    fake_prometheus.fail_paths["/api/v1/status/buildinfo"] = 500
+    again = (await http.post(f"{BASE}/test", json=entered)).json()
+    assert "not as a" not in again["message"] and "HTTP 500" in again["message"]
+
+
+async def test_health_marks_an_answering_source(monitoring_app, fake_prometheus):
+    http, _ = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    created = (
+        await http.post(
+            BASE, json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url}
+        )
+    ).json()
+    health = (await http.get(f"{BASE}/health", params={"refresh": "true"})).json()[created["id"]]
+    assert health["state"] == "down" and health["answered"] is True
+    refused = (
+        await http.post(BASE, json={"type": "prometheus", "reach": "url", "url": closed_port_url()})
+    ).json()
+    health = (await http.get(f"{BASE}/health", params={"refresh": "true"})).json()[refused["id"]]
+    assert health["state"] == "down" and health["answered"] is False
+
+
+async def test_a_stored_not_an_api_check_still_answers(monitoring_app, fake_prometheus):
+    http, app = monitoring_app
+    fake_prometheus.fail_paths.update(NO_PROMETHEUS_PATHS)
+    created = (
+        await http.post(
+            BASE, json={"type": "prometheus", "reach": "url", "url": fake_prometheus.url}
+        )
+    ).json()
+    await http.get(f"{BASE}/health", params={"refresh": "true"})
+    app.state.monitoring.health._entries.clear()  # as after a restart: only the stored check
+    listed = (await http.get(BASE)).json()
+    health = next(s for s in listed if s["id"] == created["id"])["health"]
+    assert health["state"] == "down" and health["answered"] is True
+
+
+def test_the_stored_words_of_every_type_still_answer():
+    from omnikrux.monitoring.sources.connector import NOT_AN_API, is_not_an_api
+
+    for word in ("a Prometheus", "a Loki", "an Alertmanager"):
+        assert is_not_an_api(NOT_AN_API.format(name="Some · name", type=word, status=405))
+    assert not is_not_an_api("Some answered HTTP 500. Try again, or check the tool.")
+    assert not is_not_an_api(None)

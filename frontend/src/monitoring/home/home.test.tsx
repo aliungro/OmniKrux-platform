@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { alertsKeys, type FiringOut, type OverviewOut } from "../alerts/api";
+import { alertsKeys, type FiringOut, type OverviewOut, type RuleOut } from "../alerts/api";
 import type { GroupOut, HealthOut, LinkOut, ProjectOut, SourceOut } from "../api/types";
 import { healthSummary } from "./MonitoringHome";
 import { recordRecent } from "./recent";
 import { installFakeMonitoringApi, type FakeMonitoringState } from "../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject } from "../test/renderMonitoringApp";
+import { seedDashboard, spec } from "../test/dashboardSeeds";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -151,6 +152,30 @@ describe("Monitoring Home", () => {
     expect(within(rows[1]).queryByText("Silenced")).toBeNull();
     // Still firing: the count is unchanged.
     expect(screen.getByRole("button", { name: "Alerts, 2 firing" })).toBeTruthy();
+  });
+
+  it("Silence on Home opens the prefilled form", async () => {
+    const crashing: RuleOut = {
+      id: "r1", name: "PodCrashLooping", scope: { kind: "project", id: "p1", name: "Dev cluster" }, source_type: "prometheus", source_id: null,
+      expr: "up", condition: { of: "each", op: "above", threshold: 5, for: "5m", every: "1m" }, severity: "critical", message: "",
+      contact_points: [], engine: "omnikrux", channel: null, paused: false, origin: "page", panel: null, state: "firing", firing_since: T,
+      targets: [{
+        id: "t1", project_id: "p1", project_name: "Dev cluster", engine: "omnikrux", tool: null, where: "checked by OmniKrux", engine_note: null,
+        state: "firing", state_since: T, last_eval_at: T, message: null, eval_expr: "up", rule_text: "up > 5", tool_state: null, tool_message: null,
+        leaving: false, instances: [],
+      }],
+      removing: false, version: 1, created_at: T, updated_at: T,
+    };
+    seedHealthy({ rules: [crashing], overview: overviewOf({ firing: [firingRow()] }, { firing: 1 }) });
+    const app = renderMonitoringApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Silence PodCrashLooping" }));
+    const matchers = (await screen.findByLabelText("Matchers")) as HTMLInputElement;
+    expect(matchers.value).toBe('alertname="PodCrashLooping",project="Dev cluster"');
+    expect(screen.getByRole("form", { name: "New silence" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Comment")));
+    expect(document.activeElement).not.toBe(document.body);
+    // Asked once: the view keeps only the Silences tab, so going back or reloading doesn't ask again.
+    await waitFor(() => expect(app.current().tabs.find((t) => t.view.page === "alerts")?.view).toEqual({ page: "alerts", tab: "silences" }));
   });
 
   it("Silence on a firing row opens the Silences view", async () => {
@@ -324,5 +349,73 @@ describe("Home errors in plain words", () => {
     expect(await screen.findByRole("heading", { name: "Set up your first project" })).toBeTruthy();
     expect(await screen.findByText(DOWN)).toBeTruthy();
     expect(document.body.textContent).not.toContain("Failed to fetch");
+  });
+});
+
+describe("Home, states and words", () => {
+  it("home cards list sources in one order", async () => {
+    const alerts = { ...source("s3", "Alerts"), type: "alertmanager" as const };
+    const loki = { ...source("s2", "Loki · kind"), type: "loki" as const };
+    const prom = source("s1", "Prometheus · kind");
+    installFakeMonitoringApi({
+      sources: [alerts, loki, prom],
+      projects: [withLinks(seedProject("p1", "Dev cluster"), alerts, loki, prom)],
+      health: { s1: health("up"), s2: health("up"), s3: health("up") },
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    const text = card.textContent ?? "";
+    expect(text.indexOf("Prometheus · kind")).toBeGreaterThan(-1);
+    expect(text.indexOf("Prometheus · kind")).toBeLessThan(text.indexOf("Loki · kind"));
+    expect(text.indexOf("Loki · kind")).toBeLessThan(text.indexOf("Alerts"));
+  });
+
+  it("a source that answers reads as answering on a card", async () => {
+    const prom = source("s1", "Prometheus · kind");
+    installFakeMonitoringApi({
+      sources: [prom],
+      projects: [withLinks(seedProject("p1", "Dev cluster"), prom)],
+      health: { s1: { ...health("down", 0, "Prometheus · kind answered, but not as a Prometheus API (HTTP 404). Check the address and the type."), answered: true } },
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Dev cluster/ });
+    await waitFor(() => expect(card.textContent).toContain("Answers, but not as Prometheus"));
+    expect(card.textContent).not.toContain("Can't be reached");
+  });
+
+  it("recently opened names the project", async () => {
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "Dev cluster")],
+      dashboards: { d1: seedDashboard("d1", { kind: "project", id: "p1", name: "Dev cluster" }, spec("API latency", [])) },
+    }, clustersFallback([]));
+    recordRecent({ kind: "dashboard", id: "d1" }, 1);
+    renderMonitoringApp();
+    const section = await screen.findByRole("region", { name: "Recently opened" });
+    const [item] = within(section).getAllByRole("button");
+    expect(item.textContent).toContain("API latency · Dev cluster");
+  });
+
+  it("an empty group says it has no projects", async () => {
+    installFakeMonitoringApi({
+      projects: [seedProject("p1", "Dev cluster")],
+      groups: [group("g1", "Nothing yet", [])],
+    }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Nothing yet/ });
+    expect(card.textContent).toContain("No projects yet");
+    expect(card.textContent).not.toContain("Sources not checked yet");
+  });
+});
+
+describe("Home, a project without sources", () => {
+  it("No sources yet has a text element of its own in the card's row", async () => {
+    installFakeMonitoringApi({ projects: [seedProject("p1", "Empty one")] }, clustersFallback([]));
+    renderMonitoringApp();
+    const card = await screen.findByRole("button", { name: /Empty one/ });
+    const text = within(card).getByText("No sources yet");
+    // Wrapped, so the grid row places it across its text column and not in the dot's.
+    expect(text.parentElement).not.toBe(card);
+    expect(text.parentElement?.children).toHaveLength(1);
+    expect(text.parentElement?.textContent).toBe("No sources yet");
   });
 });

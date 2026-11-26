@@ -26,12 +26,15 @@ interface Stored {
   start: string;
   /** Whether a name was typed (else it follows what is monitored). */
   named: boolean;
+  /** Whether a choice was made in it: closing its tab asks first, after a reload too. */
+  chosen?: boolean;
   draft: SetupDraft;
 }
 
 export interface RestoredDraft {
   draft: SetupDraft;
   named: boolean;
+  chosen: boolean;
 }
 
 function store(): Storage | null {
@@ -174,11 +177,11 @@ function keepableDraft(d: SetupDraft): SetupDraft {
 }
 
 /** Keeps the tab's draft. Never throws. */
-export function writeSetupDraft(tabId: string, start: string, draft: SetupDraft, named: boolean): void {
+export function writeSetupDraft(tabId: string, start: string, draft: SetupDraft, named: boolean, chosen = false): void {
   try {
     const s = store();
     if (!s) return;
-    const kept: Stored = { v: 1, start, named: named === true, draft: keepableDraft(draft) };
+    const kept: Stored = { v: 1, start, named: named === true, chosen: chosen === true, draft: keepableDraft(draft) };
     s.setItem(key(tabId), JSON.stringify(kept));
   } catch {
     // Blocked or full: the setup still works, it just won't come back.
@@ -190,6 +193,18 @@ export function removeSetupDraft(tabId: string): void {
     store()?.removeItem(key(tabId));
   } catch {
     // Nothing to do: a draft that can't be removed can't be read either.
+  }
+}
+
+/** Whether the tab keeps a setup draft with a choice in it (whatever its start). Never throws. */
+export function setupDraftChosen(tabId: string): boolean {
+  try {
+    const raw = store()?.getItem(key(tabId)) ?? null;
+    if (raw === null) return false;
+    const x: unknown = JSON.parse(raw);
+    return isObj(x) && x.v === 1 && x.chosen === true && isObj(x.draft);
+  } catch {
+    return false;
   }
 }
 
@@ -318,6 +333,7 @@ export function readSetupDraft(tabId: string, start: string): RestoredDraft | nu
   if (importFrom === null) return null;
   return {
     named: x.named,
+    chosen: x.chosen === true,
     draft: {
       step: d.step as SetupStep, kind: d.kind as ProjectKind | null, clusterId: d.clusterId, picks: picks as SetupPick[], name: d.name,
       ...(install ? { install } : {}),

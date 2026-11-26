@@ -417,3 +417,46 @@ async def test_query_through_cluster_service(
 def test_linked_project_is_a_plain_record():
     linked = LinkedProject(project_id="p", source_id="s", project_name="Shop")
     assert (linked.project_id, linked.source_id, linked.project_name) == ("p", "s", "Shop")
+
+
+async def test_query_route_uses_the_plain_words(monitoring_app, linked_project, fake_prometheus):
+    http, _ = monitoring_app
+    body = {
+        "source_id": linked_project.source_id,
+        "project_id": linked_project.project_id,
+        "kind": "instant",
+        "query": "sum(up)",
+    }
+    fake_prometheus.errors['sum(up{cluster="a"})'] = (
+        'invalid parameter "query": 1:5: parse error: unclosed left parenthesis'
+    )
+    r = await http.post(QUERY, json=body)
+    assert error(r) == (
+        400,
+        "bad_query",
+        "The query doesn't read: a bracket is never closed.",
+    )
+
+    # Without a project filter the text is the user's own: its position is theirs too.
+    fake_prometheus.errors["sum(up"] = (
+        'invalid parameter "query": 1:5: parse error: unclosed left parenthesis'
+    )
+    r = await http.post(QUERY, json={**body, "project_id": None, "query": "sum(up"})
+    assert error(r) == (
+        400,
+        "bad_query",
+        "The query doesn't read at line 1, column 5: a bracket is never closed.",
+    )
+
+    # A project whose link has no filter sends the user's own text too: the position stays.
+    link = await http.put(
+        f"/api/monitoring/projects/{linked_project.project_id}/sources/{linked_project.source_id}",
+        json={"filter": ""},
+    )
+    assert link.status_code == 200, link.text
+    r = await http.post(QUERY, json={**body, "query": "sum(up"})
+    assert error(r) == (
+        400,
+        "bad_query",
+        "The query doesn't read at line 1, column 5: a bracket is never closed.",
+    )

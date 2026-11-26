@@ -10,7 +10,7 @@ export const stream = (name: string, values: string[]): StreamLabelOut => ({ nam
 
 export const source = (id: string, over: Partial<SourceCatalogOut> = {}): SourceCatalogOut => ({
   source_id: id, source_name: id, source_type: "prometheus", state: "ok", message: null,
-  built_at: "2026-11-19T10:00:00Z", metrics: [], labels: [], streams: [], notes: [], ...over,
+  built_at: "2026-11-19T10:00:00Z", metrics: [], labels: [], streams: [], notes: [], stream_window_seconds: null, ...over,
 });
 
 export const catalogOf = (projectId: string, ...sources: SourceCatalogOut[]): CatalogOut => ({ project_id: projectId, sources });

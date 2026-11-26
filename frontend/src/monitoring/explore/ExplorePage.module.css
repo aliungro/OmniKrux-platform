@@ -264,6 +264,16 @@
   text-align: center;
 }
 
+/* Why the answer is empty: a sentence to read, centred under the query, a step darker than the note. */
+.reason {
+  max-inline-size: 60ch;
+  margin-inline: auto;
+  color: var(--ink-2);
+  line-height: 1.5;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
 /* 260 px of plot with the legend under it. */
 .chartBox {
   height: 300px;
@@ -440,9 +450,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Folded under the header: tall enough to browse, never the whole of a short window. */
   .browse {
     position: static;
-    height: 60vh;
+    height: min(60vh, 520px);
     min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--rule);
@@ -514,4 +525,67 @@
 .addOpen:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* The Added note's own row under the header (C15): always there and one line high, so a note
+   that appears never pushes the page down or splits the header. */
+.addRow {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 28px;
+  padding: 0 16px;
+  overflow: hidden;
+}
+
+.addRow .addMessage {
+  flex-wrap: nowrap;
+}
+
+.addTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A query held back because the source reads the other language (C1). Dashed like a step not yet
+   taken: nothing failed, nothing ran. */
+.held {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 8px 14px 4px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--focus) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--focus) 5%, transparent);
+}
+
+.heldText {
+  flex: 1 1 40ch;
+  max-width: 72ch;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.held .retry {
+  margin-top: 0;
+}
+
+.held .retry:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* What picking a trail chip switched ("Switched to …"): beside the chips, polite. */
+.trailNote {
+  align-self: center;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12px;
 }

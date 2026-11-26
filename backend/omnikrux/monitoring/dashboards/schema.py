@@ -515,7 +515,7 @@ def _options(w: _Walk, raw: object, path: str, kind: str) -> dict:
         out["min"] = _opt_number(w, obj, path, "min", None)
         out["max"] = _opt_number(w, obj, path, "max", None)
         out["legend"] = _opt_enum(w, obj, path, "legend", _LEGENDS)
-        out["style"] = _opt_enum(w, obj, path, "style", ("lines", "area", "stacked"))
+        out["style"] = _opt_enum(w, obj, path, "style", ("lines", "area", "stacked", "bars"))
     elif kind == "stat":
         out["calc"] = _opt_enum(w, obj, path, "calc", _CALCS)
         out["sparkline"] = _opt_bool(w, obj, path, "sparkline", True)

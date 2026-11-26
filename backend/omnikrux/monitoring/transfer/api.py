@@ -47,8 +47,10 @@ from omnikrux.monitoring.transfer.grafana_store import (
     GrafanaChange,
     GrafanaConfig,
     GrafanaSecrets,
+    HandOverChanged,
     NewGrafana,
     UnknownGrafana,
+    same_grafana,
 )
 from omnikrux.monitoring.transfer.types import TransferError
 
@@ -167,6 +169,10 @@ CLUSTER_NO_SIGN_IN = (
 TOKEN_NEEDED = "A service account token is needed."
 BASIC_NEEDS = "Basic sign-in needs a user name and a password."
 GRAFANA_NOT_SAVED = "The Grafana connection couldn't be saved. Try again."
+HAND_OVER_CHANGED = (
+    "Another connection to this Grafana changed while this one was being removed. "
+    "Nothing was removed: try again."
+)
 
 
 class GrafanaAuthIn(_Body):
@@ -235,6 +241,8 @@ class GrafanaOut(BaseModel):
     path_prefix: str
     auth: GrafanaAuthOut
     dashboards_imported: int
+    # The name of another connection that reaches this same Grafana (its target only).
+    same_as: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -246,6 +254,8 @@ class GrafanaTestOut(BaseModel):
     version: str | None
     message: str | None
     dashboards: int | None
+    # After a good test: the name of a saved connection that already reaches this Grafana.
+    same_as: str | None = None
 
 
 class GrafanaDashboardOut(BaseModel):
@@ -405,13 +415,32 @@ async def _details(registry: ClusterRegistry, cfg: GrafanaConfig) -> dict:
     return {"reach": cfg.reach, "target": _target(cfg, clusters), "auth": cfg.auth_type}
 
 
+async def _other_reaching(
+    services: MonitoringServices,
+    cfg: GrafanaConfig,
+    others: list[GrafanaConfig] | None = None,
+    *,
+    editing: str | None = None,
+) -> GrafanaConfig | None:
+    """The oldest other saved connection reaching the same Grafana as `cfg` (never `cfg` itself,
+    nor the connection being edited when `cfg` is its unsaved form)."""
+    found = [
+        g
+        for g in (await services.grafana.list() if others is None else others)
+        if g.id not in (cfg.id, editing) and same_grafana(g, cfg)
+    ]
+    return min(found, key=lambda g: (g.created_at, g.id), default=None)
+
+
 async def _outs(
     services: MonitoringServices, registry: ClusterRegistry, configs: list[GrafanaConfig]
 ) -> list[GrafanaOut]:
     clusters = {c.id: c.name for c in await registry.list()}
     outs = []
+    saved = await services.grafana.list()
     for g in configs:
         c = g.cluster
+        other = await _other_reaching(services, g, saved)
         outs.append(
             GrafanaOut(
                 id=g.id,
@@ -432,6 +461,7 @@ async def _outs(
                     has_token=g.secrets.token is not None,
                 ),
                 dashboards_imported=len(await services.origins.from_grafana(g.id)),
+                same_as=other.name if other else None,
                 created_at=g.created_at,
                 updated_at=g.updated_at,
             )
@@ -573,11 +603,23 @@ async def remove_grafana(id: str, request: Request) -> Response:
     services = _services(request)
     old = await _stored(services, id)
     imported = len(await services.origins.from_grafana(id))
+    # Only something imported can be handed over; the store re-checks the receiver in its own
+    # transaction and, since the record says so, refuses a hand-over that can't happen any more.
+    other = await _other_reaching(services, old) if imported > 0 else None
     record = await begin_change(
-        request, "grafana_remove", "grafana", old.name, {"dashboards_imported": imported}
+        request,
+        "grafana_remove",
+        "grafana",
+        old.name,
+        {"dashboards_imported": imported} | ({"handed_to": other.name} if other else {}),
     )
     try:
-        await services.grafana.delete(id)
+        await services.grafana.delete(
+            id, hand_over_to=other.id if other else None, promised=other is not None
+        )
+    except HandOverChanged:
+        await finish_change(request, record, False, HAND_OVER_CHANGED)
+        raise transfer_error(TransferError(409, "changed", HAND_OVER_CHANGED)) from None
     except UnknownGrafana:
         await finish_change(request, record, False, GRAFANA_GONE)
         raise _gone() from None
@@ -589,7 +631,9 @@ async def remove_grafana(id: str, request: Request) -> Response:
     return Response(status_code=204)
 
 
-async def _test(services: MonitoringServices, cfg: GrafanaConfig) -> GrafanaTestOut:
+async def _test(
+    services: MonitoringServices, cfg: GrafanaConfig, editing: str | None = None
+) -> GrafanaTestOut:
     """Its health, then its dashboards: a Grafana whose dashboards can't be listed can't be
     imported from, so the test says why."""
     client = services.grafana_client
@@ -604,8 +648,13 @@ async def _test(services: MonitoringServices, cfg: GrafanaConfig) -> GrafanaTest
         return GrafanaTestOut(
             ok=False, version=health.version, message=exc.message, dashboards=None
         )
+    other = await _other_reaching(services, cfg, editing=editing)
     return GrafanaTestOut(
-        ok=True, version=health.version, message=None, dashboards=len(found.items)
+        ok=True,
+        version=health.version,
+        message=None,
+        dashboards=len(found.items),
+        same_as=other.name if other else None,
     )
 
 
@@ -614,7 +663,7 @@ async def test_unsaved_grafana(request: Request) -> GrafanaTestOut:
     """Test a connection as entered; nothing is stored and nothing is audited."""
     body = await read_body(request, GrafanaIn)
     cfg = await grafana_config_from_in(body, _registry(request))
-    return await _test(_services(request), cfg)
+    return await _test(_services(request), cfg, request.query_params.get("editing"))
 
 
 @router.post("/grafana/{id}/test")

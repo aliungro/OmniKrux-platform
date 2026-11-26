@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import smtplib
 import socket
 import ssl
@@ -171,6 +172,21 @@ def _detail(text: str, secrets: Iterable[str], *, cut: bool = False) -> str:
     return _one_line(scrub_text(scrub(text, secrets)))[:DETAIL_CHARS]
 
 
+_PAGE_START = re.compile(
+    r"(?:<\?xml[^>]*>\s*)?(?:<!--.*?-->\s*)*<(?:!doctype|html|head|body)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _looks_like_html(text: str, content_type: str) -> bool:
+    """A web page, not an answer meant for a person to read: never shown. Read from its type, or
+    its start: a byte-order mark and white space, then maybe an XML declaration and comments,
+    then a doctype or an html, head or body tag."""
+    if "html" in content_type.casefold():
+        return True
+    return _PAGE_START.match(text[:2048].lstrip("\ufeff \t\r\n")) is not None
+
+
 def _seconds() -> str:
     return f"{SEND_SECONDS:g}"
 
@@ -190,10 +206,16 @@ def _number(value: float | None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
 
 
+# Labels OmniKrux adds for itself (the rule's id): kept in a webhook's JSON, never in the words.
+HIDDEN_LABELS = frozenset({"omnikrux_rule"})
+
+
 def instance_line(instance: NoticeInstance) -> str:
     if instance.message:
         return _one_line(instance.message)
-    labels = ", ".join(f"{k}={v}" for k, v in sorted(instance.labels.items()))
+    labels = ", ".join(
+        f"{k}={v}" for k, v in sorted(instance.labels.items()) if k not in HIDDEN_LABELS
+    )
     value = f"value {instance.value:g}" if instance.value is not None else ""
     return " · ".join(part for part in (labels, value) if part)
 
@@ -623,7 +645,7 @@ class SenderSet:
         name = cp.name
         sent = {"Content-Type": "application/json", **(headers or {})}
         secrets = [*cp.secrets.values(), *sent.values()]
-        status, raw, cut = 0, b"", False
+        status, raw, cut, kind = 0, b"", False, ""
         try:
             async with (
                 asyncio.timeout(SEND_SECONDS),
@@ -637,6 +659,7 @@ class SenderSet:
                 ) as response,
             ):
                 status = response.status
+                kind = response.headers.get("Content-Type", "")
                 if 200 <= status < 300:
                     return
                 if 300 <= status < 400:
@@ -652,7 +675,8 @@ class SenderSet:
             raise
         except (aiohttp.ClientError, HttpProcessingError, OSError, TimeoutError, ValueError) as exc:
             raise _http_failure(exc, name) from None
-        detail = _detail(raw.decode("utf-8", "replace"), secrets, cut=cut)
+        text = raw.decode("utf-8", "replace")
+        detail = "" if _looks_like_html(text, kind) else _detail(text, secrets, cut=cut)
         if detail:
             raise DeliveryFailed(HTTP_STATUS_DETAIL.format(name=name, status=status, detail=detail))
         raise DeliveryFailed(HTTP_STATUS.format(name=name, status=status))

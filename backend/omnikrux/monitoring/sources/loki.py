@@ -1,6 +1,7 @@
 """The connector for Loki."""
 
 import asyncio
+import re
 from collections.abc import Sequence
 from decimal import Decimal
 from urllib.parse import quote
@@ -27,7 +28,7 @@ from omnikrux.monitoring.sources.connector import (
     gather_all,
     json_object,
     number_text,
-    status_message,
+    probe_failure,
 )
 from omnikrux.monitoring.sources.transport import SourceTransport, SourceUnreachable
 from omnikrux.monitoring.sources.types import SourceConfig
@@ -38,6 +39,8 @@ EMPTY_RULER = b"no rule groups found"
 QUERY_SECONDS = 30.0
 WHAT = "a Loki server"
 VALUE_CALLS_AT_ONCE = 6
+# A label name as LogQL reads it in a stream selector.
+LABEL_NAME = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 class LokiConnector:
@@ -56,12 +59,12 @@ class LokiConnector:
         if got.status == 404:
             ready = await t.request("GET", "/ready", timeout=PROBE_SECONDS)
             if ready.status != 200:
-                return TestResult(False, None, status_message(name, ready.status))
+                return probe_failure(name, ready.status, "a Loki")
             if ready.body.strip().lower() != b"ready":
                 return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
             return TestResult(True, None, None)
         if got.status != 200:
-            return TestResult(False, None, status_message(name, got.status))
+            return probe_failure(name, got.status, "a Loki")
         data = json_object(got.body)
         if data is None:
             return TestResult(False, None, NOT_LIKE.format(name=name, what=WHAT))
@@ -114,6 +117,105 @@ class LokiConnector:
         else:
             labels = await self._list(t, "/loki/api/v1/labels", [])
         return FieldCatalog((), tuple(labels[:limit]), len(labels) > limit)
+
+    async def label_names(
+        self,
+        t: SourceTransport,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> list[str]:
+        """The label names of the streams between `start` and `end` (seconds), sorted, without
+        Loki's own (`__…`). With `matchers`, only the streams they select count (one `/series`
+        call, so nothing outside the filter is asked for); without, every stream's."""
+        window = [("start", _nanoseconds(start)), ("end", _nanoseconds(end))]
+        if matchers:
+            got = await t.request(
+                "GET",
+                "/loki/api/v1/series",
+                params=[("match[]", _selector(matchers)), *window],
+                timeout=PROBE_SECONDS,
+            )
+            data = checked_json(got, "The source", WHAT).get("data")
+            names: set[str] = set()
+            for entry in data if isinstance(data, list) else []:
+                if isinstance(entry, dict):
+                    names.update(str(k) for k in entry)
+        else:
+            names = set(await self._list(t, "/loki/api/v1/labels", window))
+        # Only names Loki would accept in a selector: they are written into queries as they are.
+        return sorted(n for n in names if LABEL_NAME.fullmatch(n) and not n.startswith("__"))
+
+    async def stream_count(
+        self,
+        t: SourceTransport,
+        selector: str,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> int:
+        """How many streams `selector`, with `matchers` added (`FilterError` when they can't
+        be), selects between `start` and `end` (seconds): one `/series` call."""
+        got = await t.request(
+            "GET",
+            "/loki/api/v1/series",
+            params=[
+                ("match[]", inject_logql(selector, matchers)),
+                ("start", _nanoseconds(start)),
+                ("end", _nanoseconds(end)),
+            ],
+            timeout=PROBE_SECONDS,
+        )
+        body = checked_json(got, "The source", WHAT)
+        data = body.get("data")
+        if data is None and body.get("status") == "success":
+            return 0  # Loki answers `null` for no streams
+        if body.get("status") != "success" or not isinstance(data, list):
+            raise QueryRejected("tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502)
+        return sum(1 for e in data if isinstance(e, dict))
+
+    async def newest_line(
+        self,
+        t: SourceTransport,
+        selector: str,
+        *,
+        matchers: Sequence[Matcher],
+        start: float,
+        end: float,
+    ) -> float | None:
+        """When (seconds) the newest line of the streams `selector` selects, with `matchers`
+        added, was written between `start` and `end`; None when there is no line. One
+        `query_range` call, read backward, for one line."""
+        got = await t.request(
+            "GET",
+            "/loki/api/v1/query_range",
+            params=[
+                ("query", inject_logql(selector, matchers)),
+                ("start", _nanoseconds(start)),
+                ("end", _nanoseconds(end)),
+                ("limit", "1"),
+                ("direction", "backward"),
+            ],
+            timeout=PROBE_SECONDS,
+        )
+        body = checked_json(got, "The source", WHAT)
+        data = body.get("data")
+        if (
+            body.get("status") != "success"
+            or not isinstance(data, dict)
+            or data.get("resultType") != "streams"
+        ):
+            raise QueryRejected("tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502)
+        try:
+            found = streams_result(data, [])
+            times = [int(at) for stream in found.streams for at, _ in stream.entries]
+        except (ValueError, TypeError):
+            raise QueryRejected(
+                "tool_error", NOT_LIKE.format(name="The source", what=WHAT), 502
+            ) from None
+        return max(times) / 1_000_000_000 if times else None
 
     async def catalog(
         self,

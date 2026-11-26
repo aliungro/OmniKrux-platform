@@ -19,7 +19,8 @@ import s from "./SetupPage.module.css";
 import i from "./ImportStep.module.css";
 
 export const CHECKING = "Checking what converts…";
-export const FIRST_SOURCE = "Each Grafana data source uses this project's first source of the same type.";
+// Setup maps nothing by address: every data source reads the project's first source of its type.
+export const FIRST_SOURCE = "Each Grafana data source goes to the first source of its type in this project.";
 export const SIGN_IN_AGAIN = "Its sign-in wasn't kept. Enter it again to load its dashboards.";
 
 /** The tail of the backend's `SIGN_IN_CLUSTER` refusal (`{name} needs a sign-in, …`), word for word. */

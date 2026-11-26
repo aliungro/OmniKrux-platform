@@ -9,7 +9,8 @@ import { renderMonitoringApp, seedProject, tabsWith } from "../test/renderMonito
 import type { Plan } from "../../api/types";
 import type { InstallPlanOut } from "../install/api";
 import { SETTINGS, status, TOOLS } from "../install/toolsFixtures";
-import { SECRET_NOT_KEPT, SETUP_DRAFT_PREFIX } from "./setupDraftStore";
+import { readSetupDraft, SECRET_NOT_KEPT, SETUP_DRAFT_PREFIX, writeSetupDraft } from "./setupDraftStore";
+import { alertFormMarks, clearAlertForms } from "../alerts/rules/formSessions";
 import { picksFromDiscovery, setupBody, type SetupDraft } from "./setupModel";
 
 beforeEach(() => localStorage.clear());
@@ -97,15 +98,15 @@ describe("Setup page", () => {
     const prom = await screen.findByRole("group", { name: "Prometheus" });
     expect(within(prom).getByText("monitoring/prometheus-server · v3.1.0")).toBeTruthy();
     expect(within(prom).getByText("Reachable")).toBeTruthy();
-    expect((within(prom).getByRole("checkbox", { name: "Use" }) as HTMLInputElement).checked).toBe(true);
+    expect((within(prom).getByRole("checkbox", { name: "Use Prometheus" }) as HTMLInputElement).checked).toBe(true);
     const loki = screen.getByRole("group", { name: "Loki" });
     expect(within(loki).getByText("Can't be reached")).toBeTruthy();
     expect(within(loki).getByText("connection refused")).toBeTruthy();
-    expect((within(loki).getByRole("checkbox", { name: "Use" }) as HTMLInputElement).checked).toBe(false);
+    expect((within(loki).getByRole("checkbox", { name: "Use Loki" }) as HTMLInputElement).checked).toBe(false);
     expect(screen.getByText("1 source in use")).toBeTruthy();
     expect(continueButton().disabled).toBe(false);
 
-    fireEvent.click(within(prom).getByRole("checkbox", { name: "Use" }));
+    fireEvent.click(within(prom).getByRole("checkbox", { name: "Use Prometheus" }));
     expect(screen.getByText("0 sources in use")).toBeTruthy();
     expect(continueButton().disabled).toBe(true);
     expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
@@ -195,6 +196,33 @@ describe("Setup page", () => {
     expect(document.activeElement?.textContent).toBe("+ Add a source by hand");
   });
 
+  it("setup says a Loki source comes with Logs overview", async () => {
+    install({ discovery: { c1: found(tool("prometheus", "reachable"), tool("loki", "reachable")) } });
+    startFromCluster();
+    const loki = await screen.findByRole("group", { name: "Loki" });
+    expect(within(loki).getByText("Comes with the ready-made view Logs overview.")).toBeTruthy();
+    const prom = screen.getByRole("group", { name: "Prometheus" });
+    expect(within(prom).getByText("Comes with the ready-made views Cluster health, Node health, Namespace health, Workload health, Pod health.")).toBeTruthy();
+    // A source that isn't used brings nothing.
+    fireEvent.click(within(loki).getByRole("checkbox", { name: "Use Loki" }));
+    expect(within(loki).queryByText(/Comes with/)).toBeNull();
+  });
+
+  it("the review lists the ready-made views", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: found(tool("prometheus", "reachable"), tool("loki", "reachable")) } });
+    startFromCluster();
+    await screen.findByRole("group", { name: "Loki" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    const summary = screen.getByRole("list", { name: "Summary" });
+    expect(within(summary).getByText("Ready-made views: Cluster health, Node health, Namespace health, Workload health, Pod health, Logs overview")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Prometheus" })).getByRole("checkbox", { name: "Use Prometheus" }));
+    await user.click(continueButton());
+    expect(within(screen.getByRole("list", { name: "Summary" })).getByText("Ready-made views: Logs overview")).toBeTruthy();
+  });
+
   it("create sends one setup request and opens the project", async () => {
     const user = userEvent.setup();
     const api = install({ suggestion: KEEPS });
@@ -253,6 +281,9 @@ describe("Setup page", () => {
     await screen.findByRole("group", { name: "Prometheus" });
     await user.click(continueButton());
     const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    // A taken name is suggested no more (the free one is `${CLUSTER} 2`): typing it again clashes.
+    await user.clear(name);
+    await user.type(name, CLUSTER);
     name.focus();
     await user.keyboard("{Control>}{Enter}{/Control}");
     expect(await screen.findByText(`A project named "${CLUSTER}" already exists. Pick another name.`)).toBeTruthy();
@@ -409,7 +440,7 @@ describe("Setup page", () => {
 });
 
 describe("Setup focus on arrival", () => {
-  it("after Create project the keyboard is on the workspace", async () => {
+  it("creating a project puts the keyboard on its heading", async () => {
     const user = userEvent.setup();
     install();
     startFromCluster();
@@ -418,7 +449,20 @@ describe("Setup focus on arrival", () => {
     await screen.findByRole("heading", { name: "Name and review" });
     await user.click(screen.getByRole("button", { name: "Create project" }));
     await waitFor(() => expect(selectedTab().textContent).toContain(CLUSTER));
-    expect(document.activeElement?.tagName).toBe("MAIN");
+    const heading = await screen.findByRole("heading", { level: 1, name: CLUSTER });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("+ New project puts the keyboard on setup's step heading", async () => {
+    installFakeMonitoringApi({}, clustersFallback);
+    renderMonitoringApp();
+    const plus = await screen.findByRole("button", { name: "New project" });
+    plus.focus();
+    fireEvent.click(plus);
+    const heading = await screen.findByRole("heading", { name: "What to monitor" });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(document.activeElement).not.toBe(document.body);
   });
 });
 
@@ -559,7 +603,7 @@ describe("Setup installs what's missing", () => {
     expect(setupPosts(api)).toHaveLength(0);
   });
 
-  it("closing a setup tab removes its draft", async () => {
+  it("Discard in that question removes the setup draft", async () => {
     const user = userEvent.setup();
     install({ discovery: { c1: PROM_AND_LOKI } });
     renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
@@ -569,8 +613,148 @@ describe("Setup installs what's missing", () => {
     await waitFor(() => expect(localStorage.getItem(`${SETUP_DRAFT_PREFIX}start0`)).not.toBeNull());
 
     await user.click(screen.getByRole("button", { name: "Close New project" }));
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
     await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("after a reload, closing a background New project tab with a chosen draft asks first", async () => {
+    const user = userEvent.setup();
+    for (const id of [...alertFormMarks.keys()]) clearAlertForms(id);
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    // As a reload finds it: Home shown, the setup tab in the background with its draft kept.
+    const kept: SetupDraft = { step: 4, kind: "kubernetes", clusterId: "c1", picks: [], name: "Shop" };
+    writeSetupDraft("start1", "c1", kept, true, true);
+    writeSetupDraft("start2", "", { step: 1, kind: null, clusterId: null, picks: [], name: "" }, false, false);
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "home" }, { page: "setup", clusterId: "c1" }, { page: "setup" }) });
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Close New project" })).toHaveLength(2));
+    // Home's search takes the keyboard as it appears.
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+
+    await user.click(screen.getAllByRole("button", { name: "Close New project" })[0]);
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(current().tabs).toHaveLength(3);
+    expect(readSetupDraft("start1", "c1")?.draft.name).toBe("Shop");
+    expect(document.activeElement).not.toBe(document.body);
+
+    // A kept draft with no choice in it closes without a question.
+    await user.click(screen.getAllByRole("button", { name: "Close New project" })[1]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(current().tabs).toHaveLength(2));
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Shown again, the restored setup still counts its choice; Discard on close removes the draft.
+    await user.click(screen.getAllByRole("tab")[1]);
+    expect(await screen.findByRole("heading", { name: "Name and review" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["home"]));
+    await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an untouched setup tab closes without asking", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    // What was found fills in by itself: no choice made yet.
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("closing a background New project tab asks first, by × and by middle-click", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Home is shown now: the setup page is gone from the screen, its draft is kept for its tab.
+    await user.click(screen.getAllByRole("tab")[1]);
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Name and review" })).toBeNull());
+    await waitFor(() => expect(localStorage.getItem(`${SETUP_DRAFT_PREFIX}start0`)).not.toBeNull());
+    expect(document.activeElement).not.toBe(document.body);
+    const ASK = 'Leave "New project" with unsaved changes?';
+
+    // The × on the background tab.
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    let ask = screen.getByRole("alertdialog", { name: ASK });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(current().tabs).toHaveLength(2);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // A middle-click on it.
+    const wrap = screen.getByRole("button", { name: "Close New project" }).parentElement!;
+    fireEvent.mouseDown(wrap, { button: 1 });
+    fireEvent(wrap, new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    ask = screen.getByRole("alertdialog", { name: ASK });
+    expect(document.activeElement).not.toBe(document.body);
+
+    // Discard: the tab closes and its draft goes with it.
+    await user.click(within(ask).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["home"]));
+    await waitFor(() => expect(Object.keys(localStorage).filter((k) => k.startsWith(SETUP_DRAFT_PREFIX))).toEqual([]));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("with a source being added by hand, closing names the setup", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    // A choice in the setup (a filter typed), then a source being added by hand.
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prometheus" }), 'job="api"');
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(screen.getByRole("button", { name: "Close New project" }));
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("closing the tab with a setup draft asks first", async () => {
+    const user = userEvent.setup();
+    install({ discovery: { c1: PROM_AND_LOKI } });
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup", clusterId: "c1" }, { page: "home" }) });
+    await screen.findByRole("group", { name: "Prometheus" });
+    await user.click(continueButton());
+    await screen.findByRole("heading", { name: "Name and review" });
+
+    // Switching tabs keeps the draft: no question.
+    await user.click(screen.getAllByRole("tab")[1]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await user.click(screen.getAllByRole("tab")[0]);
+    await screen.findByRole("heading", { name: "Name and review" });
+
+    const close = screen.getByRole("button", { name: "Close New project" });
+    await user.click(close);
+    const ask = screen.getByRole("alertdialog", { name: 'Leave "New project" with unsaved changes?' });
+    expect(within(ask).getByText("Closing this tab loses the project you started setting up.")).toBeTruthy();
+    expect(within(ask).queryByRole("button", { name: "Keep draft and leave" })).toBeNull();
+    expect(document.activeElement).toBe(within(ask).getByRole("button", { name: "Stay" }));
+    await user.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Name and review" })).toBeTruthy();
+    expect(localStorage.getItem(`${SETUP_DRAFT_PREFIX}start0`)).not.toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("unavailable tools replace the install buttons with the reason", async () => {
@@ -766,5 +950,122 @@ describe("Setup draft in this browser", () => {
     await user.click(within(lost).getByRole("button", { name: "Enter it again" }));
     expect(screen.queryByRole("group", { name: "Prometheus · bearer.example" })).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Address")));
+  });
+});
+
+describe("Setup and project links", () => {
+  const down = { state: "down" as const, message: "refused", version: null, checked_at: T };
+
+  it("setup says when it can't look inside the cluster", async () => {
+    const user = userEvent.setup();
+    const api = install({
+      discovery: { c1: { ...found(), state: "error", message: `OmniKrux can't reach ${CLUSTER}. Check that the cluster is running, then try again.` } },
+    });
+    startFromCluster();
+    expect(await screen.findByRole("heading", { name: `Can't look inside ${CLUSTER}` })).toBeTruthy();
+    expect((await screen.findByRole("alert")).textContent).toBe(`OmniKrux can't reach ${CLUSTER}. Check that it is running, or add a source by hand.`);
+    expect(screen.queryByText(/What we found/)).toBeNull();
+    expect(screen.getByText("Pick at least one source, or add one by hand.")).toBeTruthy();
+    // Nothing to install into a cluster that can't be looked into: the footer never says "install one".
+    await waitFor(() => expect(api.requests.some((r) => r.url.includes("/install/tools"))).toBe(true));
+    expect(screen.queryByText(/install one/)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(screen.getByRole("button", { name: "+ Add a source by hand" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("an unreachable cluster says so in the cluster choice", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({}, async (url: string) => json(url === "/api/clusters"
+      ? [{ id: "c1", name: CLUSTER, provider: "kind", state: "error", message: "refused" }, { id: "c2", name: "prod-east", provider: "aks", state: "ready" }] : []));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /A Kubernetes cluster/ }));
+    expect(await screen.findByRole("heading", { name: "Which cluster?" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: `${CLUSTER} · Can't be reached` })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "prod-east" })).toBeTruthy();
+    // It stays choosable: the step after it says what happened.
+    await user.click(screen.getByRole("radio", { name: `${CLUSTER} · Can't be reached` }));
+    expect(continueButton().disabled).toBe(false);
+  });
+
+  it("a cluster no app is watching is looked at, and says so when it can't be reached", async () => {
+    // The shell knows nothing about either cluster (no app watches them): setup asks Monitoring's
+    // own look inside each, and only its "can't reach" words mark a chip.
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      discovery: {
+        c1: { ...found(), state: "error", message: `OmniKrux can't reach ${CLUSTER}. Check that the cluster is running, then try again.` },
+        c2: { ...found(), cluster_id: "c2", cluster_name: "prod-east", state: "error", message: "Not allowed to list services." },
+      },
+    }, async (url: string) => json(url === "/api/clusters"
+      ? [{ id: "c1", name: CLUSTER, provider: "kind", state: "unknown", message: null }, { id: "c2", name: "prod-east", provider: "aks", state: "unknown", message: null }] : []));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /A Kubernetes cluster/ }));
+    expect(await screen.findByRole("radio", { name: `${CLUSTER} · Can't be reached` })).toBeTruthy();
+    // Another failure (not reaching it) says nothing new here.
+    expect(screen.getByRole("radio", { name: "prod-east" })).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the stepper's notes carry their full text as a title", async () => {
+    install();
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    const note = within(screen.getByRole("list", { name: "Steps" })).getByText(`${CLUSTER} · Kubernetes`);
+    expect(note.getAttribute("title")).toBe(`${CLUSTER} · Kubernetes`);
+  });
+
+  it("setup suggests a free name", async () => {
+    const user = userEvent.setup();
+    install({ projects: [seedProject("p0", CLUSTER), seedProject("p1", `${CLUSTER} 2`)] });
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    await waitFor(() => expect(screen.getByText("1 source in use")).toBeTruthy());
+    await user.click(continueButton());
+    expect((await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe(`${CLUSTER} 3`);
+  });
+
+  it("an unreachable existing source says so when ticked", async () => {
+    const user = userEvent.setup();
+    const gone = source("s1", "Central Prometheus");
+    installFakeMonitoringApi({ sources: [gone], health: { s1: down } }, async () => json([]));
+    renderMonitoringApp({ tabs: tabsWith({ page: "setup" }) });
+    await user.click(await screen.findByRole("radio", { name: /Something of your own/ }));
+    expect(screen.getByText("Any Prometheus-compatible, Loki or Alertmanager source you can reach.")).toBeTruthy();
+    await user.click(continueButton());
+    const existing = await screen.findByRole("group", { name: "Use an existing source" });
+    expect(await within(existing).findByText("Can't be reached")).toBeTruthy();
+    expect(screen.queryByText(/can't be reached now/)).toBeNull();
+    await user.click(within(existing).getByRole("checkbox", { name: "Use Central Prometheus" }));
+    expect(screen.getByText("Central Prometheus can't be reached now. You can still use it; its panels say so until it answers.")).toBeTruthy();
+  });
+
+  it("setup's switches are named after their sources", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ discovery: { c1: PROM_AND_LOKI }, sources: [source("s1", "Central Prometheus")] }, clustersFallback);
+    startFromCluster();
+    await screen.findByRole("group", { name: "Prometheus" });
+    expect(screen.getByRole("checkbox", { name: "Use Prometheus" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Use Loki" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Use" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await user.click(await screen.findByRole("radio", { name: /Something of your own/ }));
+    await user.click(continueButton());
+    expect(await screen.findByRole("checkbox", { name: "Use Central Prometheus" })).toBeTruthy();
+  });
+
+  it("a filter that matches nothing is said at the filter in setup", async () => {
+    const user = userEvent.setup();
+    const known = source("s1", "Central Prometheus");
+    const api = installFakeMonitoringApi({
+      discovery: { c1: found(tool("prometheus", "reachable", { existing_source_id: "s1" })) }, sources: [known],
+      filterChecks: { s1: { matches: false, message: null } },
+    }, clustersFallback);
+    startFromCluster();
+    const field = await screen.findByRole("textbox", { name: "Filter for Central Prometheus" });
+    await user.type(field, 'namespace="nope-ns"');
+    const line = await screen.findByText("Nothing in Central Prometheus matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    expect(line.getAttribute("role")).toBe("status");
+    expect(api.requests.some((r) => r.url === "/api/monitoring/sources/s1/filter-check")).toBe(true);
   });
 });

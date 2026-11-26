@@ -50,12 +50,21 @@ vi.mock("../territories/ResourceRowView", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../territories/ResourceRowView")>();
   return { ...orig, ResourceRowView: (props: Parameters<typeof orig.ResourceRowView>[0]) => { rowRenders.count++; return orig.ResourceRowView(props); } };
 });
-// The Monitoring app as a probe: its heading, the tab's view, links that navigate the tab, and a
-// close button wired like the tab strip's.
+// The Monitoring app as a probe: its heading, the tab's view, links that navigate the tab, a
+// close button wired like the tab strip's, and a Find field the Find event focuses (as the app's does).
 vi.mock("../../monitoring/MonitoringApp", async () => {
-  const { createElement: h } = await import("react");
+  const { createElement: h, useEffect } = await import("react");
+  const FindProbe = () => {
+    useEffect(() => {
+      const focus = () => document.getElementById("probe-find")?.focus();
+      window.addEventListener("omnikrux:monitoring-find", focus);
+      return () => window.removeEventListener("omnikrux:monitoring-find", focus);
+    }, []);
+    return h("input", { id: "probe-find", "aria-label": "Find anything" });
+  };
   return {
     default: ({ nav, tabs, dispatchTabs }: MonitoringAppProps) => h("section", null,
+      h(FindProbe),
       h("h1", null, "Monitoring"),
       h("p", { "data-testid": "monitoring-view" }, JSON.stringify(nav.view)),
       h("button", { type: "button", onClick: () => nav.navigate({ page: "project", id: "p1" }, "push") }, "Open project p1"),
@@ -134,6 +143,18 @@ it("Alt+2 opens Monitoring and Alt+1 returns to the same Kubernetes tab", async 
   expect(kubeTabs()[0].getAttribute("aria-selected")).toBe("true");
   await waitFor(() => expect(document.activeElement).not.toBe(document.body));
   expect(document.activeElement).not.toBeNull();
+});
+it("the empty dock keeps the Kubernetes hint outside Monitoring", async () => {
+  renderShell();
+  expect(await screen.findByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();
+  expect(screen.queryByText("Press ? to see all keys.")).toBeNull();
+});
+it("Monitoring shows its own dock hint", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  expect(screen.getByText("Press ? to see all keys.")).toBeTruthy();
+  expect(screen.queryByText("Open logs (l) or a shell (s) from a pod")).toBeNull();
 });
 it("Alt+T and Alt+W manage Monitoring tabs while Monitoring is shown", async () => {
   renderShell();
@@ -1255,4 +1276,45 @@ it("closing the final focused log keeps an offscreen selection outside the defer
   } finally {
     raf.mockRestore();
   }
+});
+
+it("Ctrl K outside Monitoring still opens the palette", async () => {
+  renderShell();
+  const box = await screen.findByRole("button", { name: "Commands and kinds" });
+  expect(box.getAttribute("aria-keyshortcuts")).toBe("Control+K :");
+  expect(box.getAttribute("aria-haspopup")).toBe("dialog");
+  expect(box.textContent).toContain("pods, deploy, svc, helm…");
+  fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
+  const input = within(screen.getByRole("dialog", { name: "Commands" })).getByRole("combobox");
+  expect(document.activeElement).toBe(input);
+  fireEvent.keyDown(input, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Commands" })).toBeNull());
+  expect(document.activeElement).not.toBe(document.body);
+});
+
+it("the top bar names Monitoring's Find", async () => {
+  renderShell();
+  fireEvent.keyDown(document.body, { key: "2", code: "Digit2", altKey: true });
+  await screen.findByRole("heading", { name: "Monitoring" });
+  expect(screen.queryByRole("button", { name: "Commands and kinds" })).toBeNull();
+  const box = screen.getByRole("button", { name: "Find in Monitoring" });
+  expect(box.getAttribute("aria-keyshortcuts")).toBe("/ Control+K");
+  expect(box.hasAttribute("aria-haspopup")).toBe(false);
+  expect(box.textContent).toContain("projects, dashboards, sources…");
+  expect(box.textContent).not.toContain("pods");
+  const find = screen.getByRole("textbox", { name: "Find anything" });
+  fireEvent.click(box);
+  expect(document.activeElement).toBe(find);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  // Ctrl K comes to the same Find, and ":" opens nothing here.
+  (screen.getByRole("main") as HTMLElement).focus();
+  fireEvent.keyDown(document.body, { key: "k", ctrlKey: true });
+  expect(document.activeElement).toBe(find);
+  (screen.getByRole("main") as HTMLElement).focus();
+  fireEvent.keyDown(document.body, { key: ":" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(document.activeElement).not.toBe(document.body);
+  // Back in Kubernetes, the box and Ctrl K are the palette's again.
+  fireEvent.keyDown(document.body, { key: "1", code: "Digit1", altKey: true });
+  expect(await screen.findByRole("button", { name: "Commands and kinds" })).toBeTruthy();
 });

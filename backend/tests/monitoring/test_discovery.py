@@ -320,6 +320,40 @@ def closed_port() -> int:
         return sock.getsockname()[1]
 
 
+async def test_setup_on_an_unreachable_cluster_says_so_plainly(
+    monitoring_app, kube_cluster, monkeypatch
+):
+    http, app = monitoring_app
+    port = closed_port()
+    registry = app.state.registry
+    real = registry.get_kubeconfig
+    name = await cluster_name(app, kube_cluster)
+
+    async def unreachable(cluster_id: str) -> dict:
+        kubeconfig = await real(cluster_id)
+        for entry in kubeconfig["clusters"]:
+            entry["cluster"]["server"] = f"http://127.0.0.1:{port}"
+        return kubeconfig
+
+    monkeypatch.setattr(registry, "get_kubeconfig", unreachable)
+
+    body = (await http.get(f"{BASE}/{kube_cluster}")).json()
+
+    assert body["state"] == "error" and body["found"] == []
+    assert body["message"] == messages.CLUSTER_UNREACHABLE.format(cluster=name)
+    assert "Errno" not in body["message"] and "127.0.0.1" not in body["message"]
+    assert str(port) not in body["message"]
+
+
+def test_cluster_words_name_a_cluster_that_cant_be_reached():
+    refused = ConnectionRefusedError(111, "refused")
+    assert messages.cluster_words(refused, "Dev", "list") == messages.CLUSTER_UNREACHABLE.format(
+        cluster="Dev"
+    )
+    assert messages.cluster_words(refused, "Dev", "list", "Mine: {x}") == "Mine: {x}"
+    assert "Errno" not in messages.cluster_words(refused, "Dev", "list")
+
+
 async def test_discovery_on_a_cloud_cluster_keeps_the_endpoint_private(
     cloud_cluster, cloud_http_client, monkeypatch
 ):

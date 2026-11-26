@@ -10,6 +10,18 @@ MAX_IMPORT_BYTES = 10 * 1024 * 1024
 FormatName = Literal["omnikrux_export", "omnikrux_dashboard", "grafana"]
 
 NOT_JSON = "This isn't valid JSON: {reason}. Check that the whole file or text was copied."
+NOT_JSON_AT = "This isn't valid JSON: line {line}, column {column}: {plain}."
+# The parser's own words for a missing property name: a trailing comma reads "Illegal trailing
+# comma" from Python 3.13 on, "Expecting property name ..." before.
+_PROPERTY_NAME = ("Expecting property name enclosed in double quotes", "Illegal trailing comma")
+
+
+def plain_json_words(msg: str) -> str:
+    if msg.startswith(_PROPERTY_NAME):
+        return "a property name needs double quotes"
+    return "it doesn't read as JSON"
+
+
 TOO_LARGE = "This is larger than 10 MB. Export fewer dashboards at a time."
 UNKNOWN_FORMAT = (
     "This doesn't look like an OmniKrux export or a Grafana dashboard. "
@@ -28,7 +40,10 @@ def parse_import_text(text: str) -> object:
     try:
         return json.loads(text, parse_constant=_refuse_constant)
     except json.JSONDecodeError as e:
-        reason = f"{e.msg} (line {e.lineno}, column {e.colno})"
+        plain = plain_json_words(e.msg)
+        raise TransferError(
+            422, "invalid_input", NOT_JSON_AT.format(line=e.lineno, column=e.colno, plain=plain)
+        ) from None
     except RecursionError:
         reason = "it is nested too deeply"
     except ValueError as e:

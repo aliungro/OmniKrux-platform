@@ -1,4 +1,4 @@
-import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
+import { act, cleanup, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
@@ -60,16 +60,17 @@ describe("previews", () => {
     // A preview of the last hour has a small step: the four-minute floor holds.
     expect(queries[0].query).toBe("rate(a[4m])");
     expect(result.current.a.status).toBe("done");
-    expect(MAX_PREVIEWS).toBe(3);
+    expect(MAX_PREVIEWS).toBe(8);
   });
 
-  it("only the first three candidates are previewed", async () => {
-    runBatch.mockResolvedValue([response(1), response(2), response(3)]);
-    const list = ["a", "b", "c", "d"].map((k) => cand(k));
+  it("only the first eight candidates are previewed", async () => {
+    runBatch.mockImplementation(async (q) => q.map((_, i) => response(i)));
+    const list = ["a", "b", "c", "d", "e", "f", "g", "h", "i"].map((k) => cand(k));
     const { result } = renderHook(() => usePreviews(list, ctx));
     await flush();
-    expect(runBatch.mock.calls[0][0]).toHaveLength(3);
-    expect(result.current.d).toBeUndefined();
+    expect(runBatch.mock.calls[0][0]).toHaveLength(8);
+    expect(result.current.h.status).toBe("done");
+    expect(result.current.i).toBeUndefined();
   });
 
   it("a late preview answer is ignored", async () => {
@@ -164,10 +165,50 @@ describe("preview card", () => {
       { status: "done", data: { state: "empty", series: [], logs: [], problems: [], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0 } },
       { active: true },
     );
-    expect(screen.getByText("No data in this time range.")).toBeTruthy();
+    expect(screen.getByText("Nothing to show in this time range.")).toBeTruthy();
     expect(screen.getByText("Enter to add")).toBeTruthy();
     cleanup();
     card(undefined, { added: true });
     expect(screen.getByText("Added")).toBeTruthy();
+  });
+
+  it("a selected empty card keeps its title on a row of its own", () => {
+    const empty = { state: "empty" as const, series: [], logs: [], problems: [], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0 };
+    card({ status: "done", data: empty }, { active: true });
+    const title = screen.getByText(cand("a").title);
+    const row = title.parentElement!;
+    // Only the key hint shares the title's row; the status badge sits with the query.
+    expect(within(row).getByText("Enter to add")).toBeTruthy();
+    expect(row.contains(screen.getByText("No data now"))).toBe(false);
+    expect(title.getAttribute("title")).toBe(cand("a").title);
+  });
+
+  it("a screen reader gets the whole query, the eye the short one", () => {
+    const long = { ...cand("a"), expr: `sum by (handler) (rate(prometheus_http_requests_total{code=~"5.."}[5m])) / ${"x".repeat(40)}` };
+    render(<PreviewCard candidate={long} preview={undefined} active={false} id="c" option onPick={() => {}} />);
+    const shown = document.querySelector<HTMLElement>("[aria-hidden='true'][title]")!;
+    expect(shown.textContent!.endsWith("…")).toBe(true);
+    expect(shown.title).toBe(long.expr);
+    expect(document.getElementById("c-q")!.textContent).toBe(long.expr);
+  });
+
+  it("a suggestion with no data is marked", () => {
+    const empty = { state: "empty" as const, series: [], logs: [], problems: [], summary: { series: 0, points: 0, tookMs: 0 }, editId: 0 };
+    const { container } = card({ status: "done", data: empty });
+    const button = container.querySelector("button")!;
+    expect(button.getAttribute("data-empty")).toBe("true");
+    expect(screen.getByText("Nothing to show in this time range.")).toBeTruthy();
+    expect(screen.getByText("No data now")).toBeTruthy();
+    // Loading, failed or with data: not marked.
+    for (const preview of [
+      { status: "loading" as const },
+      { status: "failed" as const, message: "The preview didn't answer. Try again." },
+      { status: "done" as const, data: { ...empty, state: "ok" as const, series: [{ labels: {}, points: [[0, 1]] as [number, number][] }] } },
+    ]) {
+      cleanup();
+      const again = card(preview as Parameters<typeof PreviewCard>[0]["preview"]);
+      expect(again.container.querySelector("[data-empty]")).toBeNull();
+      expect(screen.queryByText("No data now")).toBeNull();
+    }
   });
 });

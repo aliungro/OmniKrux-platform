@@ -12,7 +12,7 @@ import type { GroupOut, ProjectOut } from "../../api/types";
 import type { MonitoringView } from "../../shell/tabState";
 import { labelValues, type LabelValuesOut, type LabelValuesParams } from "../api";
 import { interpolate, VariableError, type ResolvedVars, type VarValue } from "../interpolate";
-import type { DashboardOwner } from "../runPanel";
+import type { DashboardOwner, RangePin } from "../runPanel";
 import { variablesUsed, type DashboardSpec, type OwnerKind, type PanelSpec, type RefreshSpec, type SourceRef, type TimeSpec, type VariableSpec } from "../schema";
 import { REFRESH_LABELS, refreshMs as refreshMsOf, resolveTime, stepFor } from "../time";
 
@@ -148,12 +148,14 @@ export interface DashboardContext {
   variables: VariableState[];
   projects: { all: ProjectRef[]; selected: VarValue } | null;
   /** The time range in seconds, from `now`. */
-  range: { start: number; end: number };
+  range: { start: number; end: number; pin?: RangePin };
   time: TimeSpec;
   /** Milliseconds; advances on refresh, on each auto-refresh tick and on time changes. */
   now: number;
   refresh: RefreshSpec;
   refreshMs: number | null;
+  /** The range ends at an absolute time: it doesn't change, so there is nothing to refresh on a timer. */
+  fixedRange: boolean;
   /** Counts refreshes (Refresh now and ticks): a panel whose window didn't move reads it again. */
   refreshSeq: number;
   refreshNow(): void;
@@ -222,8 +224,13 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     const now = Math.max(Date.now(), clock.now + 1);
     setClock({ key: timeKey, now, valuesNow: now, seq: clock.seq });
   }
-  const rangeAt = (seconds: number) =>
-    resolveTime({ from: time.from, to: time.to }, seconds) ?? resolveTime(spec.time, seconds) ?? { start: seconds - 21600, end: seconds };
+  // `pin`: what stays put in the range. An absolute end makes it one window ("window"); an absolute
+  // start with an end of now only grows ("start"); a relative one only slides with "now".
+  const pin: RangePin | undefined = !time.to.startsWith("now") ? "window" : !time.from.startsWith("now") ? "start" : undefined;
+  const rangeAt = (seconds: number) => ({
+    ...(resolveTime({ from: time.from, to: time.to }, seconds) ?? resolveTime(spec.time, seconds) ?? { start: seconds - 21600, end: seconds }),
+    pin,
+  });
   const nowSeconds = Math.floor(clock.now / 1000);
   const valuesSeconds = Math.floor(clock.valuesNow / 1000);
   // Only these inputs matter: the range is the same object until "now" or the time range moves.
@@ -239,7 +246,9 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
     setClock((c) => ({ ...c, now: Math.max(Date.now(), c.now + 1), seq: c.seq + 1 }));
   }, []);
   const refresh: RefreshSpec = view.refresh !== undefined && VALID_REFRESH.has(view.refresh) ? (view.refresh as RefreshSpec) : spec.refresh;
-  const refreshMs = refreshMsOf(refresh);
+  // Only an absolute end (a UTC time) is fixed; "now-1h" still moves, so it keeps refreshing.
+  const fixedRange = !time.to.startsWith("now");
+  const refreshMs = fixedRange ? null : refreshMsOf(refresh);
   const lastTick = useRef(clock.now);
   lastTick.current = clock.now;
   useEffect(() => {
@@ -377,7 +386,7 @@ export function useDashboardContext(view: DashboardViewState, spec: DashboardSpe
   const status = useMemo(createStatusStore, []);
 
   return {
-    owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs,
+    owner, ownerName, vars, variables, projects, range, time, now: clock.now, refresh, refreshMs, fixedRange,
     refreshSeq: clock.seq, refreshNow, retryVariable, waiting, blocked, ownerFailure, status,
   };
 }

@@ -1,8 +1,8 @@
 /* The label chips (X2): Split by and Only, under the query bar. Pills in Geist Mono; a pressed chip
-   takes the lilac ring. The more... popover opens inline under its chip. Tokens only. */
+   takes the lilac ring. Each Only label keeps a line of its own under one gutter, so a line that
+   gains or loses values never pushes another label's chips sideways. Tokens only. */
 
 .chips {
-  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -10,29 +10,45 @@
 }
 
 .row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  align-items: start;
+  column-gap: 8px;
+}
+
+.sets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.set {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-}
-
-.set {
-  display: contents;
+  min-width: 0;
+  min-height: 26px;
 }
 
 .label {
-  margin-right: 2px;
+  padding-top: 4px;
   color: var(--ink-3);
   font-size: 12px;
 }
 
 .chip {
+  max-width: 32ch;
+  overflow: hidden;
   padding: 3px 9px;
   border: 1px solid var(--rule);
   border-radius: 999px;
   background: transparent;
   color: var(--ink-2);
   font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -55,11 +71,16 @@
 
 .more {
   border-style: dashed;
+  color: var(--ink-3);
 }
 
 .muted {
   color: var(--ink-3);
   font-size: 12px;
+}
+
+.chips > .muted {
+  margin: 0 0 0 calc(4.5rem + 8px);
 }
 
 .detached {
@@ -68,61 +89,23 @@
   font-size: 12px;
 }
 
-.popover {
-  position: absolute;
-  z-index: 6;
-  top: calc(100% - 2px);
-  left: 14px;
-  width: min(320px, calc(100% - 28px));
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--rule);
-  border-radius: 10px;
-  background: var(--surf);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg) 70%, transparent);
+@media (prefers-reduced-motion: reduce) {
+  .chip {
+    transition: none;
+  }
 }
 
-.find {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px solid var(--rule);
-  border-radius: 7px;
-  background: var(--bg);
-  color: var(--ink);
-  font: inherit;
-  font-size: 12.5px;
-}
+@media (max-width: 559px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 4px;
+  }
 
-.find:focus-visible {
-  border-color: var(--focus);
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 16%, transparent);
-}
+  .label {
+    padding-top: 0;
+  }
 
-.values {
-  max-height: 200px;
-  overflow: auto;
-}
-
-.value {
-  padding: 4px 8px;
-  border-radius: 6px;
-  color: var(--ink-2);
-  font: 11.5px/1.5 "Geist Mono", ui-monospace, monospace;
-  cursor: pointer;
-  overflow-wrap: anywhere;
-}
-
-.value:hover,
-.value[data-active="true"] {
-  background: var(--surf-2);
-  color: var(--ink);
-}
-
-.value[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--focus);
-  color: var(--ink);
+  .chips > .muted {
+    margin-left: 0;
+  }
 }

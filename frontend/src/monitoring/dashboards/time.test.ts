@@ -10,6 +10,9 @@ import {
   stepFor,
   TIME_PRESETS,
   timeLabel,
+  rangeWords,
+  storedTime,
+  LOCAL_TIME_COPY,
 } from "./time";
 
 describe("time", () => {
@@ -75,5 +78,30 @@ describe("time", () => {
     expect(durationText(300)).toBe("5m");
     expect(durationText(7200)).toBe("2h");
     expect(durationText(90)).toBe("90s");
+  });
+});
+
+describe("custom ranges in words", () => {
+  const now = Math.floor(new Date(2026, 10, 25, 13, 0).getTime() / 1000);
+  const local = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  it("custom ranges read in local time", () => {
+    expect(rangeWords({ from: "now-365d", to: "now" }, now)).toBe("Last 365 days");
+    expect(rangeWords({ from: "now-1h", to: "now" }, now)).toBe("Last 1 hour");
+    expect(rangeWords({ from: "now-90s", to: "now" }, now)).toBe("Last 90 seconds");
+    expect(rangeWords({ from: local(2026, 11, 25, 10, 0), to: local(2026, 11, 25, 12, 0) }, now)).toBe("25 Nov 10:00 – 12:00");
+    expect(rangeWords({ from: local(2026, 11, 24, 22, 0), to: local(2026, 11, 25, 2, 30) }, now)).toBe("24 Nov 22:00 – 25 Nov 02:30");
+    expect(rangeWords({ from: local(2025, 3, 2, 9, 0), to: "now" }, now)).toBe("2 Mar 2025 09:00 – now");
+  });
+
+  it("local times are stored as UTC", () => {
+    expect(storedTime("2026-11-25 10:00")).toBe(local(2026, 11, 25, 10, 0));
+    expect(storedTime(" now-6h ")).toBe("now-6h");
+    expect(storedTime("now")).toBe("now");
+    expect(storedTime("2026-11-25T10:00:00Z")).toBe("2026-11-25T10:00:00Z");
+    expect(storedTime("2026-13-25 10:00")).toBeNull();
+    expect(storedTime("2026-02-30 10:00")).toBeNull();
+    expect(storedTime("yesterday")).toBeNull();
+    expect(LOCAL_TIME_COPY).toBe("Use now, now-6h, now-7d, or a local time like 2026-11-25 10:00.");
   });
 });

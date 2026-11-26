@@ -2,6 +2,8 @@
 // and how often each panel changed (`changes`, the `changeId` its chart uses). Every action that
 // changes the draft keeps unchanged panel objects identical, so only the panels it touched render
 // again. Loading a document never compacts; a user's move, resize, add or remove does (F34).
+// Undo: each draft edit keeps the draft before it in `past` (consecutive edits with one key, such
+// as typing in one panel's settings, the title or the JSON, are one step).
 
 import { appendPanel, compact, freeSpot, grow, nudge, placePanel, type Dir, type NewPanel } from "../layout";
 import {
@@ -38,6 +40,10 @@ export interface EditingState {
    * that was). Like JSON text that doesn't apply, it is unsaved work, and Save is refused while any.
    */
   alertText?: Record<string, string>;
+  /** Drafts before each undoable step, newest last (at most `UNDO_LIMIT`). */
+  past: DashboardSpec[];
+  /** The key of the newest step (`updatePanel:<id>`, `title`, `json`): another edit with it joins that step. */
+  pastKey: string | null;
 }
 
 export type EditorState = { mode: "view" } | EditingState;
@@ -51,6 +57,10 @@ export type EditorAction =
   /** A ready-made panel (Add panel's search, the suggestions) at its layout, or the first free spot. */
   | { type: "insertPanel"; panel: NewPanel; select: boolean }
   | { type: "removePanel"; id: string }
+  /** A copy below the panel: a new id, "(copy)" after its title, no alert. */
+  | { type: "duplicatePanel"; id: string }
+  /** Back to the draft before the last step (refused while the JSON text doesn't apply). */
+  | { type: "undo" }
   | { type: "place"; id: string; to: Layout }
   | { type: "nudge" | "grow"; id: string; dir: Dir }
   | { type: "select"; id: string | null }
@@ -59,7 +69,8 @@ export type EditorAction =
   /** A panel alert's threshold as typed: `text` when it isn't a number, null once it is. Not a draft edit. */
   | { type: "alertText"; id: string; text: string | null }
   | { type: "setJson"; text: string; ownerKind: OwnerKind }
-  | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec }
+  /** `key`: consecutive edits with the same key are one undo step (the title field's typing). */
+  | { type: "setDashboard"; update: (d: DashboardSpec) => DashboardSpec; key?: string }
   /** `sent`: the draft the save sent. A draft that differs from it now stays in edit mode on the new base. */
   | { type: "saved"; version: number; spec: DashboardSpec; sent?: DashboardSpec }
   | { type: "rebase"; version: number; base: DashboardSpec }
@@ -70,12 +81,22 @@ export const VIEW: EditorState = { mode: "view" };
 /** What the grid and the settings say when an edit is refused because the JSON text doesn't apply. */
 export const JSON_FIRST = "Fix the JSON first, or discard it.";
 
-const DRAFT_EDITS: ReadonlySet<EditorAction["type"]> = new Set(["updatePanel", "addPanel", "insertPanel", "removePanel", "place", "nudge", "grow", "setDashboard"]);
+const DRAFT_EDITS: ReadonlySet<EditorAction["type"]> = new Set(["updatePanel", "addPanel", "insertPanel", "removePanel", "duplicatePanel", "place", "nudge", "grow", "setDashboard", "undo"]);
+
+/** How many steps undo keeps. */
+export const UNDO_LIMIT = 50;
 /**
  * Edits made outside the JSON tab. While the JSON tab holds text that doesn't apply, they are
  * refused: applying one would replace that text with the draft and drop it silently.
  */
 export const isDraftEdit = (action: EditorAction): boolean => DRAFT_EDITS.has(action.type);
+
+/** Whether undo would change the draft (a kept step that differs from it). */
+export function canUndo(state: EditorState): boolean {
+  if (state.mode !== "edit") return false;
+  for (let i = state.past.length - 1; i >= 0; i -= 1) if (!sameJson(state.past[i], state.draft)) return true;
+  return false;
+}
 
 /** Whether the draft differs from the version it started from. */
 export function isDirty(state: EditorState): boolean {
@@ -167,7 +188,7 @@ export function newWriter(): string {
 }
 
 function fresh(dashboardId: string, baseVersion: number, base: DashboardSpec, draft: DashboardSpec, jsonText: string | null, writer = newWriter()): EditingState {
-  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {}, writer, suggestions: draft.panels.length === 0 ? "open" : "closed" };
+  return { mode: "edit", dashboardId, baseVersion, base, draft, selected: null, sideTab: "query", jsonText, jsonProblems: [], changes: {}, writer, suggestions: draft.panels.length === 0 ? "open" : "closed", past: [], pastKey: null };
 }
 
 /**
@@ -181,7 +202,24 @@ function resumed(action: Extract<EditorAction, { type: "resume" }>): EditingStat
   return result.ok ? applyDocument(state, result.spec) : { ...state, jsonProblems: result.problems };
 }
 
+/** The undo key of an edit: edits in a row with the same key are one step. */
+function stepKey(action: EditorAction): string | null {
+  if (action.type === "updatePanel") return `updatePanel:${action.id}`;
+  if (action.type === "setJson") return "json";
+  return action.type === "setDashboard" ? action.key ?? null : null;
+}
+
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  const next = reduce(state, action);
+  // Every edit that changed the draft keeps the draft before it, unless it continues the last step.
+  if (state.mode !== "edit" || next.mode !== "edit" || next.draft === state.draft
+    || action.type === "undo" || action.type === "start" || action.type === "resume") return next;
+  const key = stepKey(action);
+  if (key !== null && key === state.pastKey) return next;
+  return { ...next, past: [...state.past, state.draft].slice(-UNDO_LIMIT), pastKey: key };
+}
+
+function reduce(state: EditorState, action: EditorAction): EditorState {
   if (action.type === "start") return fresh(action.dashboardId, action.version, action.spec, action.spec, null, action.writer);
   if (action.type === "resume") return resumed(action);
   if (state.mode !== "edit") return state;
@@ -221,6 +259,22 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       delete changes[action.id];
       const out = withPanels({ ...state, changes, alertText: withoutText(state.alertText, [action.id]) }, rest, []);
       return { ...out, selected: state.selected === action.id ? null : state.selected };
+    }
+    case "duplicatePanel": {
+      const from = panels.find((p) => p.id === action.id);
+      if (!from) return state;
+      const id = nextPanelId(state.draft);
+      const title = [...`${from.title.trim() || "Untitled panel"} (copy)`].slice(0, 120).join("");
+      const copy = { ...(JSON.parse(JSON.stringify(from)) as PanelSpec), id, title, alert: null };
+      const at = { ...from.layout, y: from.layout.y + from.layout.h };
+      return withPanels(state, placePanel([...panels, copy], id, at), [id]);
+    }
+    case "undo": {
+      // Steps equal to the draft (typed back to where they began) undo nothing: they are dropped.
+      let past = state.past;
+      while (past.length > 0 && sameJson(past[past.length - 1], state.draft)) past = past.slice(0, -1);
+      if (past.length === 0) return past === state.past ? state : { ...state, past, pastKey: null };
+      return { ...applyDocument(state, past[past.length - 1]), past: past.slice(0, -1), pastKey: null };
     }
     case "place": {
       const next = placePanel(panels, action.id, action.to);

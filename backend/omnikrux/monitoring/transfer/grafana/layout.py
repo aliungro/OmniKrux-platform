@@ -114,3 +114,20 @@ def place(items: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
         cur["y"] = max(above, default=0)  # as high as the panels above it allow
         placed.append((index, cur))
     return sorted(placed, key=lambda it: (it[1]["y"], it[1]["x"], it[0]))
+
+
+def compact(panels: list[dict]) -> list[dict]:
+    """The editor's compaction over panel documents: sorted by y then x, each floated up while
+    nothing is in its way. A panel that doesn't move keeps its layout object."""
+    if not all(isinstance(p.get("layout"), dict) for p in panels):
+        return panels  # a partial document has nothing to float
+    placed: list[dict] = []
+    for p in sorted(panels, key=lambda q: (q["layout"]["y"], q["layout"]["x"])):
+        lay = p["layout"]
+        y = lay["y"]
+        while y > 0 and not any(_overlaps({**lay, "y": y - 1}, q["layout"]) for q in placed):
+            y -= 1
+        if y != lay["y"]:
+            p["layout"] = {**lay, "y": y}
+        placed.append(p)
+    return placed

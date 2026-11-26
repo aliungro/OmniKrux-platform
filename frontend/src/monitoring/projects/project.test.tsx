@@ -178,7 +178,7 @@ describe("Project page", () => {
     expect(await screen.findByText("Cluster no longer connected")).toBeTruthy();
     const page = within(document.querySelector("[data-monitoring-page]") as HTMLElement);
     expect(page.getByText("No dashboards yet. Start one with New dashboard, or copy a ready-made view.")).toBeTruthy();
-    expect(page.getByText("Link a Prometheus-compatible source to get ready-made views.")).toBeTruthy();
+    expect(page.getByText("Link a Prometheus-compatible or Loki source to get ready-made views.")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Prod" }));
     expect(await screen.findByRole("heading", { name: "Prod" })).toBeTruthy();
   });
@@ -224,6 +224,136 @@ describe("Project page", () => {
     expect(api.requests.find((r) => r.url === "/api/monitoring/dashboards/copy")?.body).toEqual({ from_id: "ready:p1:nodes", owner_kind: "project", owner_id: "p1" });
   });
 
+  it("a Loki-only project lists the Logs overview with Copy to edit", async () => {
+    const loki = source("s2", "Logs", { type: "loki" });
+    const DEV = { kind: "project" as const, id: "p1", name: "Dev" };
+    installFakeMonitoringApi({
+      sources: [loki],
+      projects: [project("p1", "Dev", [link(loki)])],
+      dashboards: { "ready:p1:logs": seedDashboard("ready:p1:logs", DEV, spec("Logs overview", []), true) },
+      readyMade: { p1: [{
+        key: "logs", id: "ready:p1:logs", title: "Logs overview", description: "Log volume and the noisiest streams.",
+        missing: [], notes: [], checked: true, check_message: null,
+      }] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    expect(within(ready).getByText("Logs overview")).toBeTruthy();
+    expect(within(ready).getByRole("button", { name: "Copy to edit Logs overview" })).toBeTruthy();
+    expect(screen.queryByText(/Link a Prometheus-compatible or Loki source/)).toBeNull();
+  });
+
+  it("a project with two Prometheus sources says which one a view reads", async () => {
+    const operator = source("s1", "Operator Prometheus");
+    const server = source("s2", "Prometheus server");
+    const loki = source("s3", "Logs", { type: "loki" });
+    const view = (key: "cluster" | "logs", title: string, sourceName: string | null) => ({
+      key, id: `ready:p1:${key}`, title, description: `${title} things.`,
+      missing: [], notes: [], checked: true, check_message: null, source_name: sourceName,
+    });
+    const views = [view("cluster", "Cluster health", "Prometheus server"), view("logs", "Logs overview", null)];
+    installFakeMonitoringApi({
+      sources: [operator, server, loki],
+      projects: [project("p1", "Dev", [link(operator), link(server), link(loki)]), project("p2", "Solo", [link(server)])],
+      readyMade: { p1: views, p2: [view("cluster", "Cluster health", "Prometheus server")] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    const [cluster, logs] = within(ready).getAllByRole("listitem");
+    expect(within(cluster).getByText("Reads Prometheus server.")).toBeTruthy();
+    // The line sits right under the description.
+    expect(within(cluster).getByText("Cluster health things.").nextElementSibling?.textContent).toBe("Reads Prometheus server.");
+    expect(within(logs).queryByText(/^Reads /)).toBeNull();
+    cleanup();
+
+    // One Prometheus: nothing to tell apart, so nothing is said.
+    open("p2");
+    const solo = await screen.findByRole("list", { name: "Ready-made views" });
+    expect(within(solo).getByText("Cluster health")).toBeTruthy();
+    expect(within(solo).queryByText(/^Reads /)).toBeNull();
+  });
+
+  it("a view that can't be checked because of another Prometheus names that source", async () => {
+    const locked = source("s1", "Locked");
+    const prom = source("s2", "Prom");
+    const reason = "Can't read Locked now, so this view can't tell whether its metrics are there. "
+      + "OmniKrux can't read this source's saved credentials: its encryption key changed. Enter the credentials and header values again.";
+    installFakeMonitoringApi({
+      sources: [locked, prom],
+      projects: [project("p1", "Dev", [link(locked), link(prom)])],
+      readyMade: { p1: [{
+        key: "cluster", id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.",
+        missing: [], notes: [], checked: false, check_message: reason, source_name: "Prom",
+      }] },
+    }, fallback);
+    open("p1");
+    const ready = await screen.findByRole("list", { name: "Ready-made views" });
+    const [cluster] = within(ready).getAllByRole("listitem");
+    // The view reads Prom; the reason it can't be checked is Locked's, and says so.
+    expect(within(cluster).getByText("Reads Prom.")).toBeTruthy();
+    expect(within(cluster).getByText(reason)).toBeTruthy();
+    expect(within(cluster).getByText(/^Can't read Locked now/).textContent).toContain("Locked");
+  });
+
+  it("linking a Loki source says it adds Logs overview", async () => {
+    const user = userEvent.setup();
+    const loki = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({ sources: [loki], projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    expect(screen.queryByText(/^Linking it/)).toBeNull();
+    await user.selectOptions(screen.getByLabelText("Source"), "s2");
+    expect(screen.getByText("Linking it adds the ready-made view Logs overview.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Link source" }));
+    expect(await screen.findByRole("button", { name: "Unlink Logs" })).toBeTruthy();
+  });
+
+  it("a source added by hand says which ready-made view it adds, none when it has them already", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    const status = await screen.findByText(/^Linked .+\. It adds the ready-made view Logs overview\.$/);
+    expect(status.getAttribute("role")).toBe("status");
+    // A second Loki adds nothing: the note has no second sentence.
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki2.example:3100");
+    await user.type(screen.getByLabelText("Name"), "Second logs");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await waitFor(() => expect(status.textContent).toBe("Linked Second logs."));
+  });
+
+  it("the linked note belongs to its project and its source", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    const status = await screen.findByText(/^Linked .+\. It adds/);
+    await user.click(await screen.findByRole("button", { name: /^Unlink/ }));
+    await waitFor(() => expect(status.textContent).toBe(""));
+  });
+
+  it("the linked note does not follow the tab to another project", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Add a source by hand" }));
+    await user.type(screen.getByLabelText("Address"), "http://loki.example:3100");
+    await user.selectOptions(screen.getByLabelText("Type"), "loki");
+    await user.click(screen.getByRole("button", { name: "Save source" }));
+    await screen.findByText(/^Linked .+\. It adds/);
+    await user.click(await screen.findByRole("treeitem", { name: "Stage" }));
+    await screen.findByRole("heading", { name: "Stage" });
+    expect(screen.queryByText(/^Linked /)).toBeNull();
+  });
+
   it("New dashboard on the project page goes to the project", async () => {
     const api = installFakeMonitoringApi({ projects: [project("p1", "Dev"), project("p2", "Stage")] }, fallback);
     open("p1");
@@ -251,7 +381,7 @@ describe("Project delete review", () => {
     }, fb);
   };
 
-  it("project delete review lists only what applies and opens on its button", async () => {
+  it("project delete review lists only what applies and opens on Cancel", async () => {
     const user = userEvent.setup();
     withEverything();
     open("p1");
@@ -263,7 +393,7 @@ describe("Project delete review", () => {
     expect(within(dialog).getByText("Other sources stay as they are and are only unlinked: Plain.")).toBeTruthy();
     expect(within(dialog).getByText("It leaves these groups; the groups stay: Prod.")).toBeTruthy();
     expect(within(dialog).queryByText("Only the project itself is removed.")).toBeNull();
-    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Delete project" }));
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Delete project…" }));
@@ -304,6 +434,21 @@ describe("Project delete review", () => {
     expect(within(dialog).getByText("Alert rules that go with it: Slow checkout, Disk full.")).toBeTruthy();
     expect(within(dialog).queryByText(/Remove its rules/)).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Delete project" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("project delete lists its silences", async () => {
+    const user = userEvent.setup();
+    const api = withEverything();
+    const silence = (id: string, matchers: string) => ({
+      id, where: { kind: "omnikrux" as const, source_id: null, source_name: null }, matchers, starts_at: T, ends_at: "2999-01-01T00:00:00Z",
+      comment: "Deploy", created_by: "ali", state: "active" as const, affects: 0,
+    });
+    api.state.silences = [silence("x1", 'alertname="Slow",project="Dev"'), silence("x2", 'project="Stage"')];
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText('Its silences go too: alertname="Slow",project="Dev".')).toBeTruthy();
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("project delete waits for cluster rules", async () => {
@@ -368,8 +513,8 @@ describe("Project delete review", () => {
     await waitFor(() => expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" }).getAttribute("aria-disabled")).toBeNull());
     expect(api.requests.some((r) => r.method === "DELETE" && r.url.startsWith("/api/monitoring/alerts/rules/r1"))).toBe(true);
     expect(within(screen.getByRole("alertdialog")).queryByText(/Remove its rules/)).toBeNull();
-    // The keyboard is on the action, never on the body.
-    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete project" })));
+    // The keyboard is on Cancel once unblocked, never on the body.
+    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" })));
   });
 
   it("when a rule's Review goes, the keyboard moves to the next rule's button", async () => {
@@ -497,6 +642,21 @@ describe("Project delete review", () => {
     expect(api.state.groups).toHaveLength(1);
     expect(api.state.sources.map((x) => x.id).sort()).toEqual(["s2", "s3"]);
     expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("deleting a project from its own tab leaves one Home tab", async () => {
+    const user = userEvent.setup();
+    const api = withEverything();
+    const { current } = renderMonitoringApp({ tabs: tabsWith({ page: "project", id: "p1" }, { page: "project", id: "p2" }, { page: "home" }) });
+    await user.click(await screen.findByRole("button", { name: "Delete project…" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete project" }));
+    // The project's tab closes; the Home tab open already becomes the active one.
+    await waitFor(() => expect(current().tabs.map((t) => t.view.page)).toEqual(["project", "home"]));
+    expect(current().active).toBe("start2");
+    expect(api.state.projects.map((p) => p.id)).toEqual(["p2"]);
+    expect(await screen.findByRole("heading", { name: "Monitoring" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("Ctrl+Enter confirms", async () => {
@@ -746,5 +906,267 @@ describe("Project page and the cluster's monitoring tools", () => {
     open("p1");
     await user.click(await screen.findByRole("button", { name: "Delete project…" }));
     expect(within(await screen.findByRole("alertdialog")).queryByText(/stay\. Uninstall them/)).toBeNull();
+  });
+});
+
+describe("Setup and project links", () => {
+  const inCluster = (id: string, name: string, over: Partial<SourceOut> = {}) =>
+    source(id, name, { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "Dev", namespace: "monitoring", service: "prometheus-server", port: "80", ...over });
+
+  it("an in-cluster source of the project's own cluster is never called mixed", async () => {
+    const mine = inCluster("s1", "Prom");
+    const elsewhere = source("s2", "Central");
+    installFakeMonitoringApi({
+      sources: [mine, elsewhere],
+      projects: [project("p1", "Dev", [
+        link(mine, "", { source_cluster_id: "c1", filter_origin: "none" }),
+        link(elsewhere, "", { source_cluster_id: null, filter_origin: "none" }),
+      ], { kind: "kubernetes", cluster_id: "c1" })],
+    }, fallback);
+    open("p1");
+    await screen.findByRole("textbox", { name: "Filter for Prom" });
+    expect(screen.getAllByText(/may include data from other clusters/)).toHaveLength(1);
+    expect(screen.getByText(/^Central may include data from other clusters/)).toBeTruthy();
+  });
+
+  it("a filter that matches nothing is said at the filter", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const api = installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: false, message: null } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'namespace="nope-ns"');
+    // Nothing is asked while the text is still changing, and nothing is said before the answer.
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+    const line = await screen.findByText("Nothing in Prom matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    expect(line.getAttribute("role")).toBe("status");
+    const asked = api.requests.filter((r) => r.url === "/api/monitoring/sources/s1/filter-check");
+    expect(asked).toHaveLength(1);
+    expect(asked[0].body).toEqual({ filter: 'namespace="nope-ns"' });
+    // Changing the text takes the line away until the new text is answered.
+    await user.type(screen.getByRole("textbox", { name: "Filter for Prom" }), "x");
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+  });
+
+  it("while the filter matches nothing, Check data shows no green count beside it", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: false, message: null } },
+      fields: { s1: { metrics: [{ name: "up", type: null, help: null, unit: null }], labels: ["a"], truncated: false } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'namespace="nope-ns"');
+    await screen.findByText("Nothing in Prom matches this filter. Check the label names and values.", {}, { timeout: 3000 });
+    await user.click(screen.getByRole("button", { name: "Check data for Prom" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check data for Prom" }).textContent).toBe("Check data"));
+    await new Promise((r) => setTimeout(r, 50));
+    // One honest answer: the amber line, not a green count of the saved filter beside it.
+    expect(screen.getByText("Nothing in Prom matches this filter. Check the label names and values.")).toBeTruthy();
+    expect(screen.queryByText("1 metric and 1 label visible to this project")).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a filter the source can't answer for says nothing new", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom)])],
+      filterChecks: { s1: { matches: null, message: "Can't reach Prom." } },
+    }, fallback);
+    open("p1");
+    await user.type(await screen.findByRole("textbox", { name: "Filter for Prom" }), 'a="b"');
+    await new Promise((r) => setTimeout(r, 900));
+    expect(screen.queryByText(/matches this filter/)).toBeNull();
+  });
+
+  it("Check data with nothing visible is a warning", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const loki = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({
+      sources: [prom, loki], projects: [project("p1", "Dev", [link(prom), link(loki)])],
+      fields: { s1: { metrics: [], labels: [], truncated: false }, s2: { metrics: [], labels: [], truncated: false } },
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Check data for Prom" }));
+    expect(await screen.findByText("Nothing in Prom is visible to this project. Check the filter.")).toBeTruthy();
+    expect(screen.queryByText(/0 metrics/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Check data for Logs" }));
+    expect(await screen.findByText("Nothing in Logs is visible to this project. Check the filter.")).toBeTruthy();
+  });
+
+  it("the source picker doesn't repeat names", async () => {
+    const user = userEvent.setup();
+    const a = source("s1", "Prom", { url: "http://prom.example:9090" });
+    const b = source("s2", "http://other.example:9090", { url: "http://other.example:9090" });
+    const mine = inCluster("s3", "Local");
+    const far = inCluster("s4", "Far", { cluster_id: "c9", cluster_name: "Other" });
+    // Named after its cluster (as setup names it): the cluster isn't said twice.
+    const named = inCluster("s5", "Prometheus · Dev");
+    installFakeMonitoringApi({
+      sources: [a, b, mine, far, named], projects: [project("p1", "Dev", [], { kind: "kubernetes", cluster_id: "c1" })],
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    const picker = await screen.findByRole("combobox", { name: "Source" });
+    const options = within(picker).getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual([
+      "Choose a source…", "Prom · http://prom.example:9090", "http://other.example:9090", "Local · Dev · monitoring/prometheus-server",
+      "Prometheus · Dev · monitoring/prometheus-server", "Far · Other · monitoring/prometheus-server",
+    ]);
+    const group = within(picker).getByRole("group", { name: "Other clusters" });
+    expect(within(group).getAllByRole("option").map((o) => o.textContent)).toEqual(["Far · Other · monitoring/prometheus-server"]);
+  });
+
+  it("Unlink can be undone with the same filter", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const api = installFakeMonitoringApi({
+      sources: [prom], projects: [project("p1", "Dev", [link(prom, 'cluster="a"', { filter_origin: "auto" })])],
+    }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Unlink Prom" }));
+    const note = await screen.findByText(/^Unlinked Prom\./);
+    expect(note.getAttribute("role")).toBe("status");
+    expect(document.activeElement).not.toBe(document.body);
+    await user.click(within(note).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(api.state.projects[0].links).toHaveLength(1));
+    expect(api.state.projects[0].links[0]).toMatchObject({ source_id: "s1", filter: 'cluster="a"', filter_origin: "auto" });
+    await screen.findByRole("textbox", { name: "Filter for Prom" });
+    expect(screen.queryByText(/^Unlinked Prom/)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("moving to another project in the same tab starts its page afresh", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const spare = source("s2", "Spare");
+    installFakeMonitoringApi({ sources: [prom, spare], projects: [project("p1", "Dev", [link(prom)]), project("p2", "Stage", [link(prom)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Use an existing source" }));
+    await screen.findByRole("combobox", { name: "Source" });
+    await user.type(screen.getByRole("textbox", { name: "Filter for Prom" }), 'job="dev-only"');
+    // The sidebar opens the other project in this tab: nothing typed for Dev shows on Stage.
+    await user.click(await screen.findByRole("treeitem", { name: "Stage" }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Stage" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Source" })).toBeNull();
+    expect((screen.getByRole("textbox", { name: "Filter for Prom" }) as HTMLInputElement).value).toBe("");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the Unlink note goes with the next action", async () => {
+    const user = userEvent.setup();
+    const prom = source("s1", "Prom");
+    const logs = source("s2", "Logs", { type: "loki" });
+    installFakeMonitoringApi({ sources: [prom, logs], projects: [project("p1", "Dev", [link(prom), link(logs)])] }, fallback);
+    open("p1");
+    await user.click(await screen.findByRole("button", { name: "Unlink Prom" }));
+    await screen.findByText(/^Unlinked Prom\./);
+    await user.click(screen.getByRole("button", { name: "Unlink Logs" }));
+    expect(await screen.findByText(/^Unlinked Logs\./)).toBeTruthy();
+    expect(screen.queryByText(/^Unlinked Prom\./)).toBeNull();
+  });
+});
+
+describe("Project page, one cluster banner", () => {
+  it("a project with an unreachable cluster says it once", async () => {
+    const prom = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "prom", port: "9090" });
+    const loki = source("s2", "Loki in dev", { type: "loki", reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "loki", port: "3100" });
+    const refused = "Can't reach dev, so it can't be read. Check that the cluster is running.";
+    const bad = () => ({ state: "down" as const, message: refused, version: null, checked_at: new Date().toISOString() });
+    const READY = { key: "cluster" as const, id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.", missing: [], notes: [], checked: false, check_message: refused };
+    installFakeMonitoringApi({
+      sources: [prom, loki],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" }), link(loki, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: bad(), s2: bad() },
+      dashboards: { "ready:p1:cluster": seedDashboard("ready:p1:cluster", { kind: "project", id: "p1", name: "Dev" }, spec("Cluster health", []), true) },
+      readyMade: { p1: [READY] },
+    }, async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []));
+    open("p1");
+    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+    expect(await screen.findByText("Can't be checked now.")).toBeTruthy();
+    expect(screen.queryByText(refused)).toBeNull();
+  });
+
+  it("a view whose Loki labels couldn't be read says Can't be checked now under the banner, once", async () => {
+    const loki = source("s2", "Loki in dev", { type: "loki", reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "loki", port: "3100" });
+    const prom = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: "prom", port: "9090" });
+    const down = "Can't reach dev, so Loki in dev can't be read. Check that the cluster is running.";
+    const promDown = "Can't reach dev, so Prom in dev can't be read. Check that the cluster is running.";
+    const unread = `OmniKrux couldn't read this Loki's labels (${down}), so its log panels assume namespace and pod labels and may stay empty.`;
+    const bad = (message: string) => ({ state: "down" as const, message, version: null, checked_at: new Date().toISOString() });
+    const PODS = { key: "pods" as const, id: "ready:p1:pods", title: "Pod health", description: "Pods.", missing: [], notes: [unread], checked: false, check_message: promDown, source_name: "Prom in dev" };
+    const LOGS = { key: "logs" as const, id: "ready:p1:logs", title: "Logs overview", description: "Logs.", missing: [], notes: [unread], checked: false, check_message: null, source_name: null };
+    installFakeMonitoringApi({
+      sources: [prom, loki],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" }), link(loki, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: bad(promDown), s2: bad(down) },
+      readyMade: { p1: [PODS, LOGS] },
+    }, async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []));
+    open("p1");
+    expect(await screen.findByText("dev can't be reached, so this project's data can't be read now.")).toBeTruthy();
+    await screen.findByRole("button", { name: "Pod health" });
+    expect(screen.queryByText(unread)).toBeNull();
+    expect(screen.queryByText(promDown)).toBeNull();
+    // One line per view, not one per reason.
+    expect(screen.getAllByText("Can't be checked now.")).toHaveLength(2);
+  });
+
+  it("a failing source of another cluster keeps its own reason", async () => {
+    const a = source("s1", "Prom in dev", { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev" });
+    const b = source("s2", "By address");
+    installFakeMonitoringApi({
+      sources: [a, b],
+      projects: [project("p1", "Dev", [link(a, "", { source_cluster_id: "c1" }), link(b)], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: {
+        s1: { state: "down", message: "x", version: null, checked_at: new Date().toISOString() },
+        s2: { state: "down", message: "y", version: null, checked_at: new Date().toISOString() },
+      },
+    }, fallback);
+    open("p1");
+    await screen.findByRole("textbox", { name: "Filter for Prom in dev" });
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
+  });
+});
+
+describe("Project page, the cluster banner needs the cluster's own words", () => {
+  const inDev = (id: string, name: string) => source(id, name, { reach: "cluster", url: null, cluster_id: "c1", cluster_name: "dev", namespace: "monitoring", service: id, port: "9090" });
+  const clusters = async (url: string) => json(url === "/api/clusters" ? [{ id: "c1", name: "dev", provider: "kind", state: "ready" }] : []);
+  const READY = { key: "cluster" as const, id: "ready:p1:cluster", title: "Cluster health", description: "Nodes and pods.", missing: [], notes: [], checked: false, check_message: "Prom in dev answered, but not as a Prometheus API (HTTP 404). Check the address and the type." };
+
+  it("a wrong address in the cluster keeps its own reason", async () => {
+    const prom = inDev("s1", "Prom in dev");
+    const why = READY.check_message;
+    installFakeMonitoringApi({
+      sources: [prom],
+      projects: [project("p1", "Dev", [link(prom, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: { s1: { state: "down", message: why, version: null, checked_at: new Date().toISOString(), answered: true } },
+      dashboards: { "ready:p1:cluster": seedDashboard("ready:p1:cluster", { kind: "project", id: "p1", name: "Dev" }, spec("Cluster health", []), true) },
+      readyMade: { p1: [READY] },
+    }, clusters);
+    open("p1");
+    expect(await screen.findByText(why)).toBeTruthy();
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
+    expect(screen.queryByText("Can't be checked now.")).toBeNull();
+  });
+
+  it("a link that is up keeps every other link's own reason", async () => {
+    const a = inDev("s1", "Prom in dev");
+    const b = inDev("s2", "Loki in dev");
+    installFakeMonitoringApi({
+      sources: [a, b],
+      projects: [project("p1", "Dev", [link(a, "", { source_cluster_id: "c1" }), link(b, "", { source_cluster_id: "c1" })], { kind: "kubernetes", cluster_id: "c1", cluster_name: "dev", cluster_provider: "kind" })],
+      health: {
+        s1: { state: "down", message: "Can't reach dev, so Prom in dev can't be read. Check that the cluster is running.", version: null, checked_at: new Date().toISOString() },
+        s2: { state: "up", message: null, version: null, checked_at: new Date().toISOString() },
+      },
+    }, clusters);
+    open("p1");
+    await screen.findByRole("textbox", { name: "Filter for Prom in dev" });
+    expect(screen.queryByText(/can't be reached, so this project's data/)).toBeNull();
   });
 });

@@ -617,3 +617,29 @@ async def test_a_followed_redirect_is_still_refused(
             await source.request("GET", "/api/v1/query", timeout=5)
     assert caught.value.code == "redirect"
     assert [r.path for r in fake_prometheus.requests] == [BUILDINFO]  # followed, then refused
+
+
+async def test_a_down_cluster_is_said_without_the_socket_error(
+    fake_api, kube_cluster, monitoring_app, monkeypatch
+):
+    _, app = monitoring_app
+    port = closed_port()
+    registry = app.state.registry
+    real = registry.get_kubeconfig
+
+    async def unreachable(cluster_id: str) -> dict:
+        kubeconfig = await real(cluster_id)
+        for entry in kubeconfig["clusters"]:
+            entry["cluster"]["server"] = f"http://127.0.0.1:{port}"
+        return kubeconfig
+
+    monkeypatch.setattr(registry, "get_kubeconfig", unreachable)
+    target = ClusterTarget(kube_cluster, "monitoring", "prom", "80", "http")
+    source = app.state.monitoring.transports.for_source(
+        config(reach="cluster", url=None, cluster=target)
+    )
+    with pytest.raises(SourceUnreachable) as caught:
+        await source.request("GET", BUILDINFO, timeout=5)
+    info = await registry.get(kube_cluster)
+    assert caught.value.message == messages.SOURCE_CLUSTER_DOWN.format(cluster=info.name, name=NAME)
+    assert "Errno" not in caught.value.message and str(port) not in caught.value.message

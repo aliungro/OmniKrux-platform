@@ -204,3 +204,20 @@
   opacity: 0.55;
   cursor: default;
 }
+
+/* A member's health, after its name: down in the bad colour, up in ok, unknown in grey. */
+.healthDot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.shortcut[data-health="up"] .healthDot {
+  background: var(--ok);
+}
+
+.shortcut[data-health="down"] .healthDot {
+  background: var(--bad);
+}

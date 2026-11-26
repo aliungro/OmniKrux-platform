@@ -3,19 +3,26 @@ import { useQueryClient } from "@tanstack/react-query";
 import { failure, HttpError } from "../../api/http";
 import { OwnerRuleLines, waitsForClusterRules } from "../alerts/reviews/OwnerRuleLines";
 import { deleteGroup, groupDeleteReview, updateGroup } from "../api/client";
-import { invalidateMonitoring, useGroups, useProjects } from "../api/hooks";
-import type { GroupDeleteReviewOut, GroupOut } from "../api/types";
+import { invalidateMonitoring, useGroups, useProjects, useSourceHealth } from "../api/hooks";
+import type { GroupDeleteReviewOut, GroupOut, HealthOut, ProjectOut } from "../api/types";
 import { takeHeadingFocus } from "../dashboards/create/arrival";
 import { OwnerDashboards } from "../dashboards/OwnerDashboards";
 import { DeleteReviewDialog } from "../DeleteReviewDialog";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
-import { projectDot } from "../home/ProjectCard";
+import { projectDot, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { ExportButton, ImportButton } from "../transfer/ExportButton";
 import { ProjectPicker } from "./GroupForm";
 import s from "./GroupPage.module.css";
+
+/** A member's health: down when any of its sources is down, up when all are up, else unknown. */
+function memberHealth(p: ProjectOut, health: Record<string, HealthOut> | undefined): "up" | "down" | "unknown" {
+  const states = p.links.map((l) => stateOf(health?.[l.source_id]));
+  if (states.includes("down")) return "down";
+  return states.length > 0 && states.every((x) => x === "up") ? "up" : "unknown";
+}
 
 /** The panel behind Edit projects: tick the projects the group combines, then Save. */
 function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
@@ -48,7 +55,7 @@ function EditProjects({ group, onDone }: { group: GroupOut; onDone(): void }) {
     <div ref={first} className={s.panel} onKeyDown={escapeCloses(onDone, busy)}>
       {projects.isError && !projects.data && <p className={s.bad} role="alert">{failure(projects.error)}</p>}
       {projects.data && (
-        <ProjectPicker projects={projects.data} picked={picked} legend="Projects"
+        <ProjectPicker projects={projects.data} picked={picked} legend="Pick the projects"
           onToggle={(id, on) => setPicked((cur) => { const next = new Set(cur); if (on) next.add(id); else next.delete(id); return next; })} />
       )}
       {error && <p className={s.bad} role="alert">{error}</p>}
@@ -67,6 +74,7 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
   const client = useQueryClient();
   const groups = useGroups();
   const projects = useProjects();
+  const healthQuery = useSourceHealth();
   const editButton = useRef<HTMLButtonElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(false);
@@ -169,11 +177,15 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
           <ul className={s.shortcuts} aria-label="Projects in this group">
             {members.map((p) => (
               <li key={p.id}>
-                <button type="button" className={s.shortcut} onClick={(e) => open({ page: "project", id: p.id }, e)}>
+                <button type="button" className={s.shortcut} data-health={memberHealth(p, healthQuery.data)}
+                  aria-describedby={memberHealth(p, healthQuery.data) === "down" ? `member-${p.id}-trouble` : undefined}
+                  onClick={(e) => open({ page: "project", id: p.id }, e)}>
                   <span aria-hidden="true">↗</span>
                   <i className={s.dot} style={{ background: projectDot(p) }} aria-hidden="true" />
                   {p.name}
+                  <i className={s.healthDot} aria-hidden="true" />
                 </button>
+                {memberHealth(p, healthQuery.data) === "down" && <span id={`member-${p.id}-trouble`} hidden>A source of this project is down.</span>}
               </li>
             ))}
           </ul>
@@ -200,7 +212,7 @@ export default function GroupPage({ view, tabId, nav, openInNewTab }: Monitoring
       {review && (
         <DeleteReviewDialog title={`Delete group ${group.name}?`} action="Delete group" busy={busy} blocked={waitsForClusterRules(review)} error={error} restoreFocusTo={deleteButton}
           onCancel={() => { if (!busy) { setReview(null); setError(null); } }} onConfirm={() => void confirmDelete()}>
-          <p>Its projects stay as they are.</p>
+          <p>{group.project_ids.length === 0 ? "It has no projects." : "Its projects stay as they are."}</p>
           {review.dashboards.length > 0 && <p>Its dashboards go with it: {review.dashboards.map((d) => d.title).join(", ")}.</p>}
           <OwnerRuleLines alertRules={review.alert_rules} clusterRules={review.cluster_rules} owner={{ kind: "group", id: group.id }}
             clusterOf={(pid) => byId.get(pid)?.cluster_name ?? null} fallbackCluster="a cluster"

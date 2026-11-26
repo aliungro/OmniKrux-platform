@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  UNREADABLE, findRawCounters, firstMetric, isLogQlMetric, isRateQuery, logSelector, quickCheck,
-  rangeDurations, replaceDurations, scanSelectors, wrapRate,
+  ONE_QUERY, UNREADABLE, findRawCounters, firstMetric, isLogQlMetric, isRateQuery, logSelector, quickCheck,
+  rangeDurations, replaceDurations, scanSelectors, severalQueries, wrapRate,
 } from "./promql";
 
 const counter = (n: string) => n.endsWith("_total");
@@ -81,5 +81,49 @@ describe("promql", () => {
     expect(firstMetric("sum BY (a) (x)")).toBe("x");
     expect(isRateQuery("SUM(rate(x[5m]))")).toBe(false);
     expect(isRateQuery("sum WITHOUT (a) (rate(x[5m]))")).toBe(true);
+  });
+
+  it.each([
+    ["up\nrate(x[5m])", true],
+    ["sum(\n rate(x[5m]))", false],
+    ['{a="b"}\n{c="d"}', true],
+    ['{a="b"}\n|= "x"', false],
+    // F9: a line that starts with an operator or a joining word continues the query before it.
+    ["up\nor vector(0)", false],
+    ["up\n/ 2", false],
+    ["a\nunless b", false],
+    ["sum(x)\nand on (job) y", false],
+    // A line that ends with an operator or a joining word carries on too.
+    ["up /\n2", false],
+    ["up and\nvector(1)", false],
+    ['{a="b"} |=\n{c="d"}', false],
+    // Blank lines and comments are not lines of the query.
+    ["up\n\n# rate(x[5m])\n", false],
+    ["up # one\n\n# two\nrate(x[5m])", true],
+    ['{a="b"}\n{c="d"}\n{e="f"}', true],
+    ['{a="b"} | json\n{c="d"}', true],
+    ["up", false],
+    ["", false],
+    ['up{job="a\nb"}', false],
+    // A vector-matching list at the end of a line is part of the operator, never an end.
+    ["a\n* on (job)\nb", false],
+    ["x / ignoring(code) group_left(node)\ny", false],
+    ["a * on (namespace, pod) group_left(node)\nkube_pod_info", false],
+    ["a\n+ ignoring (instance)\nb", false],
+    ["a / on (job) group_right (team)\nb", false],
+    ["a == bool on (job)\nb", false],
+    ["sum by (job) (rate(x[5m]))\n/ on (job) group_left\nsum by (job) (up)", false],
+    // A postfix `by (…)` does end an aggregation: a query after it is another one.
+    ["sum(x) by (job)\nup", true],
+    ["up\nsum(x)\nrate(y[5m])", true],
+    // LogQL stages chained across lines are one query; a new selector is another.
+    ['{a="b"}\n| json\n| level="error"', false],
+    ['{a="b"} |= "x"\n  != "y"', false],
+    ['{a="b"} | logfmt | status >= 500\nmethod="GET"', false],
+    ['{a="b"} | logfmt\n{c="d"}', true],
+  ])("severalQueries %j is %s", (q, out) => expect(severalQueries(q)).toBe(out));
+
+  it("one query at a time is said plainly", () => {
+    expect(ONE_QUERY).toBe("Explore runs one query at a time. Keep one query in the field, or run them one after another.");
   });
 });

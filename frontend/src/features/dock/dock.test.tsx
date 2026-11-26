@@ -139,6 +139,16 @@ afterEach(() => {
 });
 
 describe("Dock", () => {
+  it("says a given hint while empty", () => {
+    function Hinted() {
+      const d = useDock([aks, eks]);
+      return <Dock dock={d} emptyHint="Press ? to see all keys." onFocusWorkspace={() => {}} />;
+    }
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><Hinted /></QueryClientProvider>);
+    expect(screen.getByRole("status").textContent).toBe("Press ? to see all keys.");
+    expect(screen.queryByText("Open logs (l) or a shell (s) from a pod")).toBeNull();
+  });
   it("says how to open a session while empty", () => {
     renderDock();
     expect(screen.getByText("Open logs (l) or a shell (s) from a pod")).toBeTruthy();

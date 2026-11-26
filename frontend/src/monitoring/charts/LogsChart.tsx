@@ -2,9 +2,11 @@
 // measured). Up and Down move between lines; Enter shows a line's labels. The active line is
 // tracked by its key, so a refresh that shifts the list keeps focus on the same line.
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
+import { CopyButton } from "../../features/inspector/CopyButton";
 import type { ChartLogLine } from "../dashboards/runPanel";
+import { lineTag, TAG_KEYS } from "../explore/logLinks";
 import type { PanelSpec } from "../dashboards/schema";
 import styles from "./Charts.module.css";
 
@@ -57,6 +59,15 @@ function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPane
   const labelsId = useId();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+
+  // Lines from more than one stream say which one each comes from.
+  const tags = useMemo(() => lines.map((l) => {
+    const tag = lineTag(l.labels);
+    if (tag === null) return null;
+    const key = TAG_KEYS.find((k) => l.labels[k] === tag);
+    return { text: tag.length > 18 ? `${tag.slice(0, 17)}…` : tag, title: `${key}=${tag}` };
+  }), [lines]);
+  const showTags = useMemo(() => new Set(tags.filter((t) => t !== null).map((t) => t.title)).size > 1, [tags]);
 
   const indexByKey = useMemo(() => new Map(lines.map((l, i) => [l.key, i])), [lines]);
   const found = activeKey === null ? undefined : indexByKey.get(activeKey);
@@ -112,6 +123,18 @@ function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPane
     virtualizer.scrollToIndex(next, { align: "auto" });
   };
   const page = () => Math.max(1, Math.floor((scrollRef.current?.clientHeight || 320) / ROW) - 1);
+  const toggle = (key: string) => setOpen((k) => (k === key ? null : key));
+  const closeToLine = () => {
+    const el = open === null ? undefined : rowRefs.current.get(open) ?? rowRefs.current.get(activeLine.key);
+    setOpen(null);
+    el?.focus({ preventScroll: true });
+  };
+  // A click opens the line, but a drag that selected text in it doesn't.
+  const onClick = (line: ChartLogLine) => (e: MouseEvent<HTMLElement>) => {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString() !== "" && (e.currentTarget.contains(sel.anchorNode) || e.currentTarget.contains(sel.focusNode))) return;
+    toggle(line.key);
+  };
   const onKey = (i: number, line: ChartLogLine) => (e: KeyboardEvent) => {
     switch (e.key) {
       case "ArrowDown": e.preventDefault(); move(i + 1); break;
@@ -120,7 +143,7 @@ function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPane
       case "PageUp": e.preventDefault(); move(i - page()); break;
       case "Home": e.preventDefault(); move(0); break;
       case "End": e.preventDefault(); move(lines.length - 1); break;
-      case "Enter": e.preventDefault(); setOpen((k) => (k === line.key ? null : line.key)); break;
+      case "Enter": e.preventDefault(); toggle(line.key); break;
       case "Escape":
         if (open !== null) {
           e.stopPropagation();
@@ -165,9 +188,11 @@ function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPane
                 style={{ transform: `translateY(${v.start}px)`, height: wrap ? undefined : ROW }}
                 onKeyDown={onKey(v.index, line)}
                 onFocus={() => setActiveKey(line.key)}
+                onClick={onClick(line)}
               >
                 <time className={styles.logTime}>{logTime(line.ts)}</time>
                 {lineTone ? <LevelCell tone={lineTone(line)} /> : null}
+                {showTags && tags[v.index] ? <span className={styles.logTag} title={tags[v.index]!.title}>{tags[v.index]!.text}</span> : null}
                 <span className={styles.logText}>
                   {line.projectName !== null ? <span className={styles.logProject}>{line.projectName} </span> : null}
                   {line.line}
@@ -177,17 +202,36 @@ function LogList({ panel, lines, lineTone, listKeyshortcuts }: { panel: LogsPane
           })}
         </div>
       </div>
-      <div id={labelsId} role="status" aria-live="polite" className={openLine ? styles.logLabels : undefined}>
-        {openLine
-          ? labels.length === 0
-            ? <span className={styles.logValue}>No labels on this line.</span>
-            : labels.map(([k, val]) => (
-              <span key={k} className={styles.logLabel}>
-                <span className={styles.logKey}>{k}</span>
-                <span className={styles.logValue}>{val}</span>
-              </span>
-            ))
-          : null}
+      <div
+        id={labelsId}
+        role="status"
+        aria-live="polite"
+        className={openLine ? styles.logOpen : undefined}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && openLine) {
+            e.stopPropagation();
+            closeToLine();
+          }
+        }}
+      >
+        {openLine ? (
+          <>
+            <div className={styles.logFull}>
+              <p className={styles.logFullText}>{openLine.line}</p>
+              <CopyButton text={openLine.line} label="Copy line" className={styles.logCopy} />
+            </div>
+            <div className={styles.logLabels}>
+              {labels.length === 0
+                ? <span className={styles.logValue}>No labels on this line.</span>
+                : labels.map(([k, val]) => (
+                  <span key={k} className={styles.logLabel}>
+                    <span className={styles.logKey}>{k}</span>
+                    <span className={styles.logValue}>{val}</span>
+                  </span>
+                ))}
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );

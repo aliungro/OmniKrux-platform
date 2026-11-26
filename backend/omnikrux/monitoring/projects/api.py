@@ -95,6 +95,8 @@ class LinkOut(BaseModel):
     filter: str
     filter_origin: FilterOrigin
     created_by_project: bool
+    # The cluster a source reached inside a cluster runs in; None for any other source.
+    source_cluster_id: str | None = None
 
 
 class ProjectOut(BaseModel):
@@ -183,6 +185,11 @@ class ToolsStayRefOut(BaseModel):
     namespace: str
 
 
+class SilenceRefOut(BaseModel):
+    id: str
+    matchers: str
+
+
 class ProjectDeleteReviewOut(BaseModel):
     """`alert_rules` and `cluster_rules` are left out of the answer when empty (read them as
     `[]`), and `tools_stay` when there are none, as they are left out of the token: a review
@@ -202,6 +209,8 @@ class ProjectDeleteReviewOut(BaseModel):
     cluster_rules: list[RuleRefOut] = []
     # The monitoring tools OmniKrux installed in the project's cluster: they stay installed.
     tools_stay: ToolsStayRefOut | None = None
+    # Its OmniKrux silences (`project="{name}"`): they go with it.
+    silences: list[SilenceRefOut] = []
 
 
 class GroupDeleteReviewOut(BaseModel):
@@ -344,6 +353,9 @@ def _link_out(project_id: str, link: Link, source: SourceConfig) -> LinkOut:
         filter=render_matchers(link.matchers),
         filter_origin=link.origin,
         created_by_project=source.created_by_project_id == project_id,
+        source_cluster_id=source.cluster.cluster_id
+        if source.reach == "cluster" and source.cluster is not None
+        else None,
     )
 
 
@@ -426,6 +438,7 @@ def _review_out(review: ProjectDeleteReview) -> ProjectDeleteReviewOut:
             if review.tools_stay is not None
             else None
         ),
+        silences=[SilenceRefOut(id=x.id, matchers=x.matchers) for x in review.silences],
     )
 
 
@@ -621,7 +634,11 @@ async def rename_project(id: str, body: ProjectPatch, request: Request) -> Proje
     if name == project.name:
         return await _project_out(request, project)
     record = await begin_change(
-        request, "project_change", "project", name, {"renamed_from": project.name}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"renamed_to": name, "change": f"Renamed to {name}."},
     )
     try:
         renamed = await services.projects.rename(id, name)
@@ -646,8 +663,22 @@ async def link_source(id: str, source_id: str, body: LinkIn, request: Request) -
     project = await _project(services, id)
     source = await _source(services, source_id)
     text = render_matchers(matchers)
+    if any(link.source_id == source_id for link in project.links):
+        change = (
+            f"Set the filter on {source.name} to {text}."
+            if text
+            else f"Removed the filter on {source.name}."
+        )
+    elif text:
+        change = f"Linked {source.name} with the filter {text}."
+    else:
+        change = f"Linked {source.name} with no filter."
     record = await begin_change(
-        request, "project_change", "project", project.name, {"linked": source.name, "filter": text}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"linked": source.name, "filter": text, "change": change},
     )
     try:
         link = await services.projects.link(id, source_id, matchers, body.origin)
@@ -674,7 +705,11 @@ async def unlink_source(id: str, source_id: str, request: Request) -> Response:
         raise _gone(NOT_LINKED)
     source = await _source(services, source_id)
     record = await begin_change(
-        request, "project_change", "project", project.name, {"unlinked": source.name}
+        request,
+        "project_change",
+        "project",
+        project.name,
+        {"unlinked": source.name, "change": f"Unlinked {source.name}."},
     )
     try:
         await services.projects.unlink(id, source_id)
@@ -743,6 +778,20 @@ async def remove_project(id: str, token: str, request: Request) -> Response:
             )
         await _begin_dashboard_removes(request, records, "project", review.name, review.dashboards)
         await _begin_rule_removes(request, records, "project", review.name, review.alert_rules)
+        for silence in review.silences:
+            records.append(
+                await begin_change(
+                    request,
+                    "silence_remove",
+                    "silence",
+                    silence.matchers,
+                    {
+                        "where": "OmniKrux",
+                        "matchers": silence.matchers,
+                        "removed_with_project": review.name,
+                    },
+                )
+            )
     except HTTPException as exc:
         await _finish_all(request, records, False, str(exc.detail))
         raise
@@ -826,12 +875,13 @@ async def change_group(id: str, body: GroupPatch, request: Request) -> GroupOut:
     name = checked_name(body.name) if body.name is not None else None
     details: dict = {}
     if name is not None and name != group.name:
-        details["renamed_from"] = group.name
+        details["renamed_to"] = name
+        details["change"] = f"Renamed to {name}."
     if body.project_ids is not None:
         details["projects"] = _chosen(names, body.project_ids)
     if not details:
         return _group_out(group, names)
-    record = await begin_change(request, "group_change", "group", name or group.name, details)
+    record = await begin_change(request, "group_change", "group", group.name, details)
     try:
         updated = await services.groups.update(id, name=name, project_ids=body.project_ids)
     except NameTaken as exc:

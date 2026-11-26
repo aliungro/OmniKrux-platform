@@ -182,6 +182,8 @@ class UpdatePreviewOut(BaseModel):
     source_label: str
     source_version: int | None
     previous_source_version: int | None
+    # A Grafana dashboard whose version is the one this dashboard last took: nothing new to take.
+    no_new_version: bool
     digest: str
 
 
@@ -579,6 +581,7 @@ def _preview_out(u: _Update) -> UpdatePreviewOut:
         source_label=u.source.label,
         source_version=u.source_version,
         previous_source_version=origin.grafana_version,
+        no_new_version=u.source_version is not None and u.source_version == origin.grafana_version,
         digest=u.digest,
     )
 

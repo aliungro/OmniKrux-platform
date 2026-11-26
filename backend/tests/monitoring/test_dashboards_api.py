@@ -507,3 +507,66 @@ async def test_explore_save_over_a_guessed_version_is_refused_without_added_pane
     saves = [r for r in await monitoring_records(http) if r["action"] == "dashboard_save"]
     assert saves == []
     assert (await http.get(f"{DASHBOARDS}/{d['id']}")).json()["version"] == 1
+
+
+async def test_copy_title_fits_with_its_suffix(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    pid = linked_project.project_id
+    source = await create(http, pid, doc("x" * 120))
+    r = await http.post(
+        f"{DASHBOARDS}/copy",
+        json={"from_id": source["id"], "owner_kind": "project", "owner_id": pid},
+    )
+    assert r.status_code == 201, r.text
+    title = r.json()["title"]
+    assert title == "x" * 113 + " (copy)" and len(title) == 120
+
+
+def _with_variables(title: str) -> dict:
+    prom = {"type": "prometheus", "id": None}
+    base = {"type": "labelValues", "source": prom, "match": "up"}
+
+    def var(name: str, **extra) -> dict:
+        return {"name": name, "label": name.title(), "labelName": name, **base, **extra}
+
+    spec = doc(title)
+    spec["variables"] = [
+        var("namespace", multi=True, includeAll=True, default="all"),
+        var("pod", multi=False, includeAll=False, default=[]),
+        var("node", multi=False, includeAll=False, default=["n1"]),
+    ]
+    return spec
+
+
+async def test_copy_starts_at_the_given_variable_values(monitoring_app, linked_project):
+    http, _ = monitoring_app
+    pid = linked_project.project_id
+    source = await create(http, pid, _with_variables("Pods"))
+    r = await http.post(
+        f"{DASHBOARDS}/copy",
+        json={
+            "from_id": source["id"],
+            "owner_kind": "project",
+            "owner_id": pid,
+            "defaults": {
+                "namespace": ["demo", "kube-system"],
+                "pod": "all",  # not valid: no includeAll
+                "node": ["a", "b"],  # not valid: one value only
+                "gone": ["x"],  # unknown name
+            },
+        },
+    )
+    assert r.status_code == 201, r.text
+    by_name = {v["name"]: v["default"] for v in r.json()["spec"]["variables"]}
+    assert by_name == {"namespace": ["demo", "kube-system"], "pod": [], "node": ["n1"]}
+    again = await http.post(
+        f"{DASHBOARDS}/copy",
+        json={
+            "from_id": source["id"],
+            "owner_kind": "project",
+            "owner_id": pid,
+            "defaults": {"namespace": "all", "pod": ["p1"]},
+        },
+    )
+    by_name = {v["name"]: v["default"] for v in again.json()["spec"]["variables"]}
+    assert by_name["namespace"] == "all" and by_name["pod"] == ["p1"]

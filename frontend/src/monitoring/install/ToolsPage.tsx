@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSources } from "../api/hooks";
 import { failure } from "../../api/http";
 import { useClusters } from "../../api/useClusters";
 import type { MonitoringPageProps } from "../MonitoringApp";
@@ -141,6 +142,7 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
   const clusterId = view.page === "tools" ? view.clusterId : "";
   const reviews = useInstallReviews();
   const clusters = useClusters().data;
+  const sources = useSources().data;
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const alive = useRef(true);
@@ -206,16 +208,22 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
     else nav.navigate(target, "push");
   };
 
+  // Until the list has loaded (or when it failed) the source is not named.
+  const sourceWords = (id: string) => { const name = sources?.find((x) => x.id === id)?.name; return name ? `the source ${name}` : "an existing source"; };
   const others = status && status.others.length > 0 && (
     <div className={s.others}>
       <ul className={s.otherList}>
         {status.others.map((t) => (
           <li key={`${t.type}:${t.namespace}/${t.service}`}>
-            {status.cluster_name} already runs {TOOL_WORDS[t.type as ToolType] ?? t.type} at {t.namespace}/{t.service}. You can connect it instead of installing another.
+            {t.existing_source_id
+              ? `${status.cluster_name} already runs ${TOOL_WORDS[t.type as ToolType] ?? t.type} at ${t.namespace}/${t.service}, and it is ${sourceWords(t.existing_source_id)}.`
+              : `${status.cluster_name} already runs ${TOOL_WORDS[t.type as ToolType] ?? t.type} at ${t.namespace}/${t.service}. You can connect it instead of installing another.`}
           </li>
         ))}
       </ul>
-      <button type="button" className={s.secondary} onClick={() => nav.navigate({ page: "setup", clusterId }, "push")}>Use it in a project</button>
+      {status.others.some((t) => !t.existing_source_id) && (
+        <button type="button" className={s.secondary} onClick={() => nav.navigate({ page: "setup", clusterId }, "push")}>Use it in a project</button>
+      )}
     </div>
   );
 
@@ -247,12 +255,17 @@ export default function ToolsPage({ view, nav, openInNewTab }: MonitoringPagePro
   }
 
   const problem = readError ?? status?.problem ?? null;
-  const when = status ? readAt(status.checked_at) : null;
+  // A read that failed says when, once: no Refresh beside its Try again.
+  const failedAt = problem !== null ? (status ? readAt(status.checked_at) : (query.errorUpdatedAt ? readAt(new Date(query.errorUpdatedAt).toISOString()) : null)) : null;
+  const when = status && !problem ? readAt(status.checked_at) : null;
   return (
     <section className={s.page} aria-labelledby={`${id}-h`} aria-busy={query.isFetching || undefined}>
       <header className={s.head}>
         <h1 id={`${id}-h`} ref={heading} tabIndex={-1} className={s.title}>Monitoring tools in {clusterName}</h1>
-        {status && (
+        {problem !== null && failedAt && (
+          <div className={s.readLine}><span className={s.read}>Couldn&apos;t read at {failedAt}</span></div>
+        )}
+        {status && !problem && (
           <div className={s.readLine}>
             {when && <span className={s.read}>Read {when}</span>}
             <button type="button" className={s.quiet} onClick={read}>Refresh</button>

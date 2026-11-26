@@ -1,21 +1,34 @@
 // Metrics and logs on one timeline (X3): the log lines under Explore's chart. In metrics mode they
 // come from the Only chips' labels that Loki has (or a LogQL selector the user writes); in logs mode
-// from the query itself. A window chosen on the chart narrows them to exactly that window; Show all
-// goes back. Its states are its own: a failure here never touches the chart above.
+// from the query itself, and they are the whole result (no chart). A window chosen on the chart
+// narrows them to exactly that window; Show all goes back. Its states are its own: a failure here
+// never touches the chart above, and a text that can't run names nothing but its own error.
 
-import { forwardRef, lazy, Suspense, useMemo, type Ref } from "react";
+import { forwardRef, lazy, Suspense, useMemo, useState, type Ref } from "react";
+import { useEmptyReason } from "../dashboards/emptyReason";
 import type { PanelData } from "../dashboards/runPanel";
 import { newPanel, type PanelSpec } from "../dashboards/schema";
-import { LINES_LIMIT, lineCount, lineTone, windowLabel } from "./logLinks";
-import type { LinesRunState } from "./useExploreRun";
+import { LINES_LIMIT, countWords, lineTone, windowLabel } from "./logLinks";
+// After a text that can't run: `✗ {message} Fix the query to run it again.`
+import { FIX_QUERY, type LinesRunState } from "./useExploreRun";
 import s from "./LinkedLogs.module.css";
 
 const ChartView = lazy(() => import("../charts"));
 
 export const LINKED_HINT = "Pick values under Only, or write a LogQL selector, to see matching log lines here.";
+/** With no chips to pick from (a typed query), the hint points only to the field. */
+export const SELECTOR_HINT = "Write a LogQL selector to see matching log lines here.";
 export const METRIC_QUERY = "This is a metric query, so there are no lines to list.";
 const ROW = 22;
 const MAX_LIST = 320;
+const WRAP_KEY = "omnikrux.monitoring.explore.wrap";
+
+function readWrap(): boolean {
+  try { return localStorage.getItem(WRAP_KEY) === "1"; } catch { return false; }
+}
+function saveWrap(on: boolean) {
+  try { localStorage.setItem(WRAP_KEY, on ? "1" : "0"); } catch { /* not remembered */ }
+}
 
 type Range = { start: number; end: number };
 
@@ -25,6 +38,8 @@ export interface LinkedLogsProps {
   sourceName: string;
   /** Metrics mode: the Logs query field's text and its edits. */
   field?: { value: string; onChange(text: string): void };
+  /** Metrics mode: the Only chips are shown, so the hint can point to them. */
+  chips?: boolean;
   /** The selector shown in the info line; `null` when there is none. */
   selector: string | null;
   /** The text is a LogQL metric query: a chart, no lines. */
@@ -41,38 +56,47 @@ export interface LinkedLogsProps {
 }
 
 export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function LinkedLogs(props, ref) {
-  const { mode, sourceName, field, selector, metricQuery, state, current, window, range, onShowAll, onRetry, showAllRef, headingRef } = props;
+  const { mode, sourceName, field, chips = false, selector, metricQuery, state, current, window, range, onShowAll, onRetry, showAllRef, headingRef } = props;
+  const [wrap, setWrap] = useState(readWrap);
   const panel = useMemo<PanelSpec>(() => {
     const p = newPanel("logs", "explore:lines", { x: 0, y: 0, w: 12, h: 8 });
     p.title = "Log lines";
-    if (p.type === "logs") p.options = { ...p.options, limit: LINES_LIMIT, order: "newest", wrap: false };
+    if (p.type === "logs") p.options = { ...p.options, limit: LINES_LIMIT, order: "newest", wrap };
     return p;
-  }, []);
+  }, [wrap]);
   const lines = current ? state.lines : [];
   const data = useMemo<PanelData>(() => ({
     state: lines.length > 0 ? "ready" : "empty", series: [], logs: lines, problems: [],
     summary: { series: 0, points: 0, tookMs: 0 }, editId: 0,
   }), [lines]);
 
-  const nothing = metricQuery || selector === null;
+  // A text that can't run is about itself only: its lines are gone and no selector is named.
+  const invalid = !metricQuery && current && state.status === "invalid";
+  const nothing = metricQuery || selector === null || invalid;
   const loading = !nothing && (!current || state.status === "waiting" || state.status === "running");
   const done = !nothing && current && state.status === "done";
   const failed = !nothing && current && state.status === "failed";
-  const invalid = !nothing && current && state.status === "invalid";
+  // Empty lines: why, about the request that ran (a chosen window is in it), once the check proves it.
+  const none = done && state.lines.length === 0;
+  const reason = useEmptyReason(none && state.request ? { sourceType: "loki", request: state.request } : null);
 
   let said = "";
   if (done) {
     const n = state.lines.length;
-    const newest = n >= LINES_LIMIT ? ` · showing the newest ${LINES_LIMIT}` : "";
-    said = state.window ? `${windowLabel(state.window, n)}${newest}` : `${state.timeText ?? ""} · ${lineCount(n)}${newest}`;
+    said = state.window ? windowLabel(state.window, n) : `${state.timeText ?? ""} · ${countWords(n)}`;
   }
 
   return (
     <section ref={ref} className={s.section} aria-label="Log lines">
       <header className={s.head}>
         <h2 ref={headingRef} className={s.title} tabIndex={-1}>Log lines</h2>
-        {selector !== null && !metricQuery && (
+        {selector !== null && !metricQuery && !invalid && (
           <p className={s.info}>Logs from <code className={s.selector}>{selector}</code> · {sourceName}</p>
+        )}
+        {selector !== null && !metricQuery && !invalid && (
+          <button type="button" className={s.wrap} aria-pressed={wrap} onClick={() => { saveWrap(!wrap); setWrap(!wrap); }}>
+            Wrap lines
+          </button>
         )}
       </header>
 
@@ -97,8 +121,18 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
 
       {metricQuery ? (
         <p className={s.note}>{METRIC_QUERY}</p>
+      ) : invalid ? (
+        // The text is wrong: fixing it is the way on, so there's no Try again. A log query's meta
+        // line already says what is wrong (it speaks for these lines): here only the step.
+        mode === "logs"
+          ? <p className={s.invalid} data-lines-invalid=""><span className={s.invalidStep}>{FIX_QUERY}</span></p>
+          : (
+            <p className={s.invalid} data-lines-invalid="">
+              <span className={s.invalidMark} aria-hidden="true">✗</span> {state.message} <span className={s.invalidStep}>{FIX_QUERY}</span>
+            </p>
+          )
       ) : selector === null ? (
-        mode === "metrics" ? <p className={s.note}>{LINKED_HINT}</p> : null
+        mode === "metrics" ? <p className={s.note}>{chips ? LINKED_HINT : SELECTOR_HINT}</p> : null
       ) : (
         <>
           <div className={s.windowRow}>
@@ -116,12 +150,11 @@ export const LinkedLogs = forwardRef<HTMLElement, LinkedLogsProps>(function Link
               <button type="button" className={s.retry} onClick={onRetry}>Try again</button>
             </div>
           )}
-          {invalid && <p className={s.note}>{state.message}</p>}
-          {done && state.lines.length === 0 && (
-            <p className={s.note}>{state.window ? "No log lines in this window." : "No log lines in this time range."}</p>
-          )}
+          {none && (reason
+            ? <p className={`${s.note} ${s.reason}`} data-empty-reason="">{reason}</p>
+            : <p className={s.note}>{state.window ? "No log lines in this window." : "No log lines in this time range."}</p>)}
           {done && state.lines.length > 0 && (
-            <div className={s.lines} style={{ height: Math.min(MAX_LIST, state.lines.length * ROW + 8) }}>
+            <div className={s.lines} style={{ height: wrap ? MAX_LIST : Math.min(MAX_LIST, state.lines.length * ROW + 8) }}>
               <Suspense fallback={<p className={s.note}>Loading lines…</p>}>
                 <ChartView panel={panel} data={data} range={state.window ?? range} animate={false} changeId={0}
                   lineTone={lineTone} listKeyshortcuts="l" />

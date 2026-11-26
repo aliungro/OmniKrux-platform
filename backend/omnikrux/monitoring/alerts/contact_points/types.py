@@ -77,6 +77,8 @@ MISSING_SECRET = {
     "webhook": "A webhook needs its address.",
 }
 URL_RULE = "Use an http or https address."
+SLACK_ADDRESS = "Use a Slack webhook address that starts with https://hooks.slack.com/."
+SLACK_PREFIX = "https://hooks.slack.com/"
 TO_NEEDED = "Add at least one address to send to."
 ADDRESS_RULE = "Use addresses like ops@example.test."
 PORT_RULE = "Use a port from 1 to 65535."
@@ -208,6 +210,15 @@ def _has_control(text: str) -> bool:
     return any(unicodedata.category(c) == "Cc" for c in text)
 
 
+def stored_problem(cp: ContactPoint) -> str | None:
+    """What is wrong with a stored contact point's address, in words (never the address): a
+    Slack one saved before Slack addresses were checked still sends, but says it needs changing."""
+    url = (
+        cp.secrets.get("webhook_url") if cp.type == "slack" and not cp.secrets_unreadable else None
+    )
+    return SLACK_ADDRESS if url and not url.startswith(SLACK_PREFIX) else None
+
+
 def checked_name(name: object) -> str:
     if not isinstance(name, str):
         raise ContactPointInvalid(NAME_RULE)
@@ -324,6 +335,11 @@ def checked_settings(type: ContactPointType, given: Mapping[str, object]) -> dic
 
 
 def _checked_secret(type: ContactPointType, key: str, value: str) -> str:
+    if type == "slack" and key == "webhook_url":
+        # Slack's incoming webhooks live on one host: anything else can't be Slack.
+        if not isinstance(value, str) or not value.startswith(SLACK_PREFIX):
+            raise ContactPointInvalid(SLACK_ADDRESS)
+        return checked_url(value)
     if key in URL_SECRETS:
         return checked_url(value)
     if key == "routing_key":

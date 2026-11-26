@@ -4,18 +4,19 @@ import { useClusters } from "../../api/useClusters";
 import { failure, HttpError } from "../../api/http";
 import { deleteProject, linkSource, projectDeleteReview, renameProject, sourceFields, suggestFilter, unlinkSource } from "../api/client";
 import { invalidateMonitoring, useGroups, useProject, useSourceHealth, useSources } from "../api/hooks";
-import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut } from "../api/types";
+import type { FilterOrigin, HealthOut, LinkOut, ProjectDeleteReviewOut, ProjectOut, SourceOut } from "../api/types";
 import { takeHeadingFocus } from "../dashboards/create/arrival";
 import { OwnerDashboards } from "../dashboards/OwnerDashboards";
+import { readyAddedBy, readyViewsPhrase } from "../dashboards/readyViews";
 import { EditableName } from "../EditableName";
 import { escapeCloses } from "../focus";
 import { mayMixClusters, mixedLinkWords } from "../alerts/rules/clusterWarning";
-import { ageNote, kindLine, projectDot, STATE_WORDS, stateOf } from "../home/ProjectCard";
+import { ageNote, kindLine, projectDot, stateOf } from "../home/ProjectCard";
 import type { MonitoringPageProps } from "../MonitoringApp";
 import { MONITORING_HOME, type MonitoringView } from "../shell/tabState";
 import { clearImportFailure, importFailedWords, importFailure } from "../setup/importNotice";
 import { SourceForm } from "../sources/SourceForm";
-import { isQueryable, sourceTypeLabel, whereLabel } from "../sources/sourceLabels";
+import { isQueryable, sortLinks, sourceTypeLabel, stateWords, whereLabel } from "../sources/sourceLabels";
 import { FilterField, validFilter } from "./FilterField";
 import { ProjectDeleteReview } from "./ProjectDeleteReview";
 import { ExportButton, ImportButton } from "../transfer/ExportButton";
@@ -25,17 +26,45 @@ import s from "./ProjectPage.module.css";
 const UNKNOWN: HealthOut = { state: "unknown", message: null, version: null, checked_at: null };
 const STALE_REVIEW = "Something changed since the review. Review it again.";
 
-/** The project's dashboards, then its ready-made views (generated from its Prometheus). */
-export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab }: {
+/** The project's dashboards, then its ready-made views (generated from its Prometheus and Loki). */
+export function ProjectDashboardsSlot({ project, tabId, nav, openInNewTab, downCluster = null }: {
   project: ProjectOut;
+  /** Every failing source is down for this one cluster, which the page says once: views don't repeat why. */
+  downCluster?: string | null;
   tabId: string;
   nav: MonitoringPageProps["nav"];
   openInNewTab(view: MonitoringView): void;
 }) {
   return (
     <OwnerDashboards owner={{ kind: "project", id: project.id, name: project.name }} tabId={tabId} nav={nav} openInNewTab={openInNewTab}
-      prometheus={project.links.some((l) => l.source_type === "prometheus")} />
+      readyMade={project.links.some((l) => l.source_type === "prometheus" || l.source_type === "loki")} downCluster={downCluster}
+      manyPrometheus={project.links.filter((l) => l.source_type === "prometheus").length >= 2} />
   );
+}
+
+/** What linking a source of this type brings: "It adds the ready-made view Logs overview." or nothing. */
+const addsLine = (project: ProjectOut, type: string | undefined): string | null => {
+  const titles = type === "prometheus" || type === "loki" ? readyAddedBy(project, type) : [];
+  return titles.length > 0 ? `adds ${readyViewsPhrase(titles)}.` : null;
+};
+
+export const nothingVisibleWords = (source: string) => `Nothing in ${source} is visible to this project. Check the filter.`;
+const UNDO_AFTER_MS = 10_000;
+const SAVED_FOR_MS = 5_000;
+
+/**
+ * The cluster every failing source fails for, when each says it can't reach that very cluster
+ * (the server's words, `Can't reach {cluster}, so …`); any other reason keeps its own line.
+ */
+export function unreachableCluster(links: LinkOut[], health: Record<string, HealthOut>, nameOf: (id: string) => string | null): string | null {
+  const failing = links.filter((l) => stateOf(health[l.source_id]) === "down");
+  // One link that answers (or has not been checked) is enough to keep each link's own reason.
+  if (failing.length === 0 || failing.length < links.length) return null;
+  const ids = new Set(failing.map((l) => l.source_cluster_id ?? null));
+  const id = ids.size === 1 ? [...ids][0] : null;
+  const name = id === null ? null : nameOf(id);
+  if (name === null) return null;
+  return failing.every((l) => (health[l.source_id]?.message ?? "").startsWith(`Can't reach ${name}, so `)) ? name : null;
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -44,20 +73,28 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 const originOf = (filter: string, origin: FilterOrigin): FilterOrigin => (filter.trim() === "" ? "none" : origin);
 
 /** One source link: its health, its label filter (editable here), Check data and Unlink. */
-function LinkRow({ project, link, health, onUnlinked }: {
-  project: ProjectOut; link: LinkOut; health: HealthOut; onUnlinked(): void;
+function LinkRow({ project, link, health, onUnlinked, onAct }: {
+  project: ProjectOut; link: LinkOut; health: HealthOut; onUnlinked(link: LinkOut): void; onAct(): void;
 }) {
   const client = useQueryClient();
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [check, setCheck] = useState<"busy" | { ok: boolean; text: string } | null>(null);
+  const [check, setCheck] = useState<"busy" | { ok: boolean; text: string; warn?: boolean } | null>(null);
   const [unlinking, setUnlinking] = useState(false);
   // Which filter a Check data answer belongs to: editing or saving the filter starts a new one, and
   // an answer for an older one is dropped.
   const checkRound = useRef(0);
+  // The filter field says nothing matches the text in it.
+  const [nothing, setNothing] = useState(false);
   const forgetCheck = () => { checkRound.current += 1; setCheck(null); };
+  // "Filter saved." goes after a while.
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => setSaved(false), SAVED_FOR_MS);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
 
   const value = draft ?? link.filter;
   const dirty = draft !== null && draft !== link.filter;
@@ -67,6 +104,7 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const save = async () => {
     if (!dirty || invalid || saving) return;
+    onAct();
     setSaving(true);
     setProblem(null);
     try {
@@ -84,16 +122,19 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const runCheck = async () => {
     if (check === "busy") return;
+    onAct();
     const round = checkRound.current;
     setCheck("busy");
-    const answer = (next: { ok: boolean; text: string }) => { if (round === checkRound.current) setCheck(next); };
+    const answer = (next: { ok: boolean; text: string; warn?: boolean }) => { if (round === checkRound.current) setCheck(next); };
     try {
       const out = await sourceFields(link.source_id, project.id);
       const labels = plural(out.labels.length, "label", "labels");
       const text = link.source_type === "loki"
         ? `${labels} visible to this project`
         : `${plural(out.metrics.length, "metric", "metrics")} and ${labels} visible to this project`;
-      answer({ ok: true, text });
+      // Nothing visible is a warning, not a green answer: the project's filter may select nothing.
+      const nothing = link.source_type === "loki" ? out.labels.length === 0 : out.metrics.length === 0 && out.labels.length === 0;
+      answer(nothing ? { ok: true, warn: true, text: nothingVisibleWords(link.source_name) } : { ok: true, text });
     } catch (err) {
       answer({ ok: false, text: failure(err, "check again") });
     }
@@ -101,12 +142,13 @@ function LinkRow({ project, link, health, onUnlinked }: {
 
   const unlink = async () => {
     if (unlinking) return;
+    onAct();
     setUnlinking(true);
     setProblem(null);
     try {
       await unlinkSource(project.id, link.source_id);
       await invalidateMonitoring(client);
-      onUnlinked();
+      onUnlinked(link);
     } catch (err) {
       setProblem(failure(err, "try again"));
       setUnlinking(false);
@@ -120,11 +162,12 @@ function LinkRow({ project, link, health, onUnlinked }: {
           <span className={s.name}>{link.source_name}</span>
           <span className={s.kind}>{sourceTypeLabel(link.source_type)}</span>
           <span className={s.health} data-state={state} title={state === "down" ? (health.message ?? undefined) : undefined}>
-            <i className={s.pip} aria-hidden="true" />{STATE_WORDS[state]}{age ? ` · ${age}` : ""}
+            <i className={s.pip} aria-hidden="true" />{stateWords(health, link.source_type)}{age ? ` · ${age}` : ""}
           </span>
         </div>
         <div className={s.filterLine}>
           <FilterField value={value} origin={draft === null ? link.filter_origin : "user"} reason={null} forName={link.source_name}
+            check={isQueryable(link.source_type) ? { sourceId: link.source_id, sourceName: link.source_name } : undefined} onNothing={setNothing}
             onChange={(v) => { setDraft(v); setSaved(false); forgetCheck(); }} />
           <button type="button" className={s.secondary} aria-label={`Save filter for ${link.source_name}`}
             aria-disabled={!dirty || invalid || saving || undefined} onClick={() => void save()}>
@@ -143,15 +186,38 @@ function LinkRow({ project, link, health, onUnlinked }: {
             aria-disabled={unlinking || undefined} onClick={() => void unlink()}>Unlink</button>
         </div>
         {saved && !dirty && <p className={s.ok} role="status">Filter saved.</p>}
-        {check && check !== "busy" && <p className={check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>}
+        {/* One honest answer: while the filter's own line says nothing matches, no count says otherwise. */}
+        {check && check !== "busy" && !(nothing && check.ok && !check.warn) && (
+          <p className={check.warn ? s.warn : check.ok ? s.ok : s.bad} role={check.ok ? "status" : "alert"}>{check.text}</p>
+        )}
         {problem && <p className={s.bad} role="alert">{problem}</p>}
       </div>
     </li>
   );
 }
 
+function hostOf(url: string | null): string {
+  try { return new URL(url ?? "").hostname; } catch { return ""; }
+}
+/** Whether a source's name already says where it is reached. */
+function holdsWhere(x: SourceOut): boolean {
+  const name = x.name.toLowerCase();
+  const where = whereLabel(x).toLowerCase();
+  if (where === "" || name.includes(where)) return true;
+  const part = (x.reach === "cluster" ? x.service ?? "" : hostOf(x.url)).toLowerCase();
+  return part !== "" && name.includes(part);
+}
+/** An option of the source picker: the name, and where the source is only when the name doesn't
+ * say; a part of where the name already holds (its cluster, as setup names sources) isn't said again. */
+function optionWords(x: SourceOut): string {
+  if (holdsWhere(x)) return x.name;
+  const name = x.name.toLowerCase();
+  const parts = whereLabel(x).split(" · ").filter((p) => p !== "" && !name.includes(p.toLowerCase()));
+  return parts.length > 0 ? `${x.name} · ${parts.join(" · ")}` : x.name;
+}
+
 /** Pick a saved source that is not linked yet and give it a filter (suggested where OmniKrux can tell). */
-function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; onClose(): void; onLinked(): void }) {
+function ExistingPanel({ project, onClose, onLinked, onAct }: { project: ProjectOut; onClose(): void; onLinked(): void; onAct(): void }) {
   const client = useQueryClient();
   const sources = useSources();
   const select = useRef<HTMLSelectElement>(null);
@@ -168,6 +234,12 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   const linked = new Set(project.links.map((l) => l.source_id));
   const choices = (sources.data ?? []).filter((x) => !linked.has(x.id));
   const invalid = validFilter(filter) !== null;
+  const chosen = choices.find((x) => x.id === sourceId);
+  const adds = sourceId ? addsLine(project, chosen?.type) : null;
+  // A Kubernetes project lists sources inside another cluster apart.
+  const other = (x: SourceOut) => project.kind === "kubernetes" && project.cluster_id !== null && x.reach === "cluster" && x.cluster_id !== project.cluster_id;
+  const here = choices.filter((x) => !other(x));
+  const elsewhere = choices.filter(other);
 
   // The keyboard goes to the choice, or to Cancel when there is nothing to choose: the button that opened this is gone.
   useEffect(() => { (select.current ?? cancel.current)?.focus(); }, [choices.length > 0]);
@@ -194,6 +266,7 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
 
   const link = async () => {
     if (busy || !sourceId || invalid) return;
+    onAct();
     setBusy(true);
     setError(null);
     try {
@@ -216,13 +289,20 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
             <label htmlFor="project-existing-source" className={s.fieldLabel}>Source</label>
             <select id="project-existing-source" ref={select} className={s.select} value={sourceId} onChange={(e) => choose(e.target.value)}>
               <option value="">Choose a source…</option>
-              {choices.map((x) => <option key={x.id} value={x.id}>{x.name} · {sourceTypeLabel(x.type)} · {whereLabel(x)}</option>)}
+              {here.map((x) => <option key={x.id} value={x.id}>{optionWords(x)}</option>)}
+              {elsewhere.length > 0 && (
+                <optgroup label="Other clusters">
+                  {elsewhere.map((x) => <option key={x.id} value={x.id}>{optionWords(x)}</option>)}
+                </optgroup>
+              )}
             </select>
           </div>
           {sourceId && (
             <FilterField value={filter} origin={origin} reason={reason} forName="the new link"
+              check={chosen && isQueryable(chosen.type) ? { sourceId: chosen.id, sourceName: chosen.name } : undefined}
               onChange={(v, o) => { touched.current = true; setFilter(v); setOrigin(o); }} />
           )}
+          {adds && <p className={s.muted}>{`Linking it ${adds}`}</p>}
         </>
       )}
       {error && <p className={s.bad} role="alert">{error}</p>}
@@ -238,7 +318,14 @@ function ExistingPanel({ project, onClose, onLinked }: { project: ProjectOut; on
   );
 }
 
-export default function ProjectPage({ view, tabId, nav, openInNewTab }: MonitoringPageProps) {
+/** One page per project: another project opened in the same tab starts afresh (no form, filter
+ * draft, review or note of the one before it shows on it). */
+export default function ProjectPage(props: MonitoringPageProps) {
+  const id = props.view.page === "project" ? props.view.id : "";
+  return <ProjectPageBody key={id} {...props} />;
+}
+
+function ProjectPageBody({ view, tabId, nav, openInNewTab, leaveDeleted }: MonitoringPageProps) {
   const id = view.page === "project" ? view.id : "";
   const client = useQueryClient();
   const projectQuery = useProject(id);
@@ -252,6 +339,20 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   const backTo = useRef<"existing" | "hand" | null>(null);
   const [adding, setAdding] = useState<"existing" | "hand" | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [linkedNote, setLinkedNote] = useState<{ projectId: string; sourceId: string; text: string } | null>(null);
+  // The link just removed, kept for a while so Undo can put it back with the same filter and origin.
+  const [unlinked, setUnlinked] = useState<{ projectId: string; link: LinkOut } | null>(null);
+  const undoButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (unlinked === null) return;
+    const timer = window.setTimeout(() => {
+      // The keyboard never falls onto <body> with the button.
+      if (document.activeElement === undoButton.current) sourcesHeading.current?.focus();
+      setUnlinked(null);
+    }, UNDO_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [unlinked]);
+  const settle = () => { setLinkedNote(null); setUnlinked(null); };
   const [review, setReview] = useState<ProjectDeleteReviewOut | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -294,6 +395,9 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     && !clusters.data!.some((c) => c.id === project.cluster_id);
   const clusterName = clusterGone ? null
     : (project.cluster_name ?? clusters.data?.find((c) => c.id === project.cluster_id)?.name ?? null);
+  // Every failing source is reached through the one cluster, which can't be reached: said once here.
+  const downCluster = unreachableCluster(project.links, health, (id) =>
+    clusters.data?.find((c) => c.id === id)?.name ?? (project.cluster_id === id ? project.cluster_name : null));
   const inGroups = (groups.data ?? []).filter((g) => g.project_ids.includes(project.id));
 
   const rename = async (name: string) => {
@@ -327,8 +431,10 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     setReviewError(null);
     try {
       await deleteProject(project.id, review.token);
-      // The tab shows Home in place of this project (MonitoringApp hands the keyboard to the workspace).
-      nav.navigate(MONITORING_HOME, "replace");
+      // The tab shows Home in place of this project, or closes onto the Home tab open already
+      // (MonitoringApp hands the keyboard to the workspace).
+      if (leaveDeleted) leaveDeleted();
+      else nav.navigate(MONITORING_HOME, "replace");
       void invalidateMonitoring(client);
     } catch (err) {
       setReviewBusy(false);
@@ -346,8 +452,11 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
   };
 
   /** A source made by hand here is saved already; give it a link, with a suggested filter where one can be made. */
-  const linkNew = async (sourceId: string) => {
+  const linkNew = async (saved: SourceOut, info?: { failedTest: boolean }) => {
+    const sourceId = saved.id;
+    const adds = addsLine(project, saved.type);
     setPageError(null);
+    setLinkedNote(null);
     let filter = "";
     let origin: FilterOrigin = "none";
     try {
@@ -360,12 +469,31 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
     try {
       await linkSource(project.id, sourceId, filter, originOf(filter, origin));
       await invalidateMonitoring(client);
+      setLinkedNote({ projectId: project.id, sourceId, text: `Linked ${saved.name}.${adds ? ` It ${adds}` : ""}${info?.failedTest ? " It didn't answer the last test, so its panels say so until it does." : ""}` });
     } catch (err) {
       setPageError(`The source was saved but could not be linked to this project: ${failure(err)} Use an existing source to link it.`);
       void invalidateMonitoring(client);
     }
     closePanel();
   };
+
+  const undoUnlink = async () => {
+    if (!unlinked) return;
+    const { link } = unlinked;
+    setUnlinked(null);
+    sourcesHeading.current?.focus();
+    try {
+      await linkSource(project.id, link.source_id, link.filter, link.filter_origin);
+    } catch (err) {
+      setPageError(`Couldn't link ${link.source_name} again: ${failure(err, "link it again from Use an existing source")}`);
+    }
+    await invalidateMonitoring(client);
+  };
+  const unlinkedName = unlinked && unlinked.projectId === project.id && !project.links.some((l) => l.source_id === unlinked.link.source_id)
+    ? unlinked.link.source_name : null;
+
+  const linkedText = linkedNote && linkedNote.projectId === project.id && project.links.some((l) => l.source_id === linkedNote.sourceId)
+    ? linkedNote.text : "";
 
   const open = (target: MonitoringView, e: { ctrlKey: boolean; metaKey: boolean }) =>
     e.ctrlKey || e.metaKey ? openInNewTab(target) : nav.navigate(target, "push");
@@ -378,7 +506,13 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
         {clusterGone && <p className={s.warn}>Cluster no longer connected</p>}
       </header>
 
+      {downCluster !== null && (
+        <p className={s.bad} role="status">{`${downCluster} can't be reached, so this project's data can't be read now.`}</p>
+      )}
+
       {pageError && <p className={s.bad} role="alert">{pageError}</p>}
+      {/* Always mounted, so filling it is announced; shown only for this project while its source is still linked. */}
+      <p className={s.live} role="status">{linkedText}</p>
       {importFailed.id === project.id && importFailed.message !== null && (
         <div className={s.importFailed} role="alert">
           <p>{importFailedWords(importFailed.message)}</p>
@@ -393,22 +527,29 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
         {project.links.length === 0 && <p className={s.muted}>No sources yet. Use an existing one or add one by hand.</p>}
         {project.links.length > 0 && (
           <ul className={s.list}>
-            {project.links.map((l) => (
+            {sortLinks(project.links).map((l) => (
               <LinkRow key={l.source_id} project={project} link={l} health={health[l.source_id] ?? UNKNOWN}
-                onUnlinked={() => sourcesHeading.current?.focus()} />
+                onAct={settle}
+                onUnlinked={(gone) => { setLinkedNote(null); setUnlinked({ projectId: project.id, link: gone }); sourcesHeading.current?.focus(); }} />
             ))}
           </ul>
         )}
+        {unlinkedName !== null && (
+          <p className={s.undo} role="status">
+            Unlinked {unlinkedName}.{" "}
+            <button ref={undoButton} type="button" className={s.quiet} onClick={() => void undoUnlink()}>Undo</button>
+          </p>
+        )}
         {adding === null ? (
           <div className={s.addRow}>
-            <button ref={addExisting} type="button" className={s.secondary} onClick={() => setAdding("existing")}>Use an existing source</button>
-            <button ref={addHand} type="button" className={s.secondary} onClick={() => setAdding("hand")}>Add a source by hand</button>
+            <button ref={addExisting} type="button" className={s.secondary} onClick={() => { settle(); setAdding("existing"); }}>Use an existing source</button>
+            <button ref={addHand} type="button" className={s.secondary} onClick={() => { settle(); setAdding("hand"); }}>Add a source by hand</button>
           </div>
         ) : adding === "existing" ? (
-          <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} />
+          <ExistingPanel project={project} onClose={closePanel} onLinked={closePanel} onAct={settle} />
         ) : (
           <div className={s.panel}>
-            <SourceForm mode="save" closeOnEscape onSaved={(saved) => linkNew(saved.id)} onCancel={closePanel} />
+            <SourceForm mode="save" closeOnEscape tabId={tabId} page="project" pageId={id} onSaved={(saved, info) => linkNew(saved, info)} onCancel={closePanel} />
           </div>
         )}
       </section>
@@ -425,7 +566,7 @@ export default function ProjectPage({ view, tabId, nav, openInNewTab }: Monitori
           <ExportButton kind="project" id={project.id} label="Export project" name={project.name} />
           <ImportButton onOpen={(e) => open({ page: "import", target: { kind: "project", id: project.id } }, e)} />
         </div>
-        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} />
+        <ProjectDashboardsSlot project={project} tabId={tabId} nav={nav} openInNewTab={openInNewTab} downCluster={downCluster} />
       </section>
 
       <section aria-labelledby="monitoring-project-groups" className={s.section}>

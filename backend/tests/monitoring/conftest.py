@@ -504,7 +504,7 @@ async def installed_cluster(
 
 # A Slack address with a secret in its path: it must never leave the backend except into the
 # Secret OmniKrux writes into its own Alertmanager.
-WEBHOOK_URL = "https://hooks.slack.example.test/services/T000/B000/XXXX-SECRET"
+WEBHOOK_URL = "https://hooks.slack.com/services/T000/B000/XXXX-SECRET"
 HOOK_URL = "https://hooks.example.test/omnikrux/XXXX-SECRET-HOOK"
 
 

@@ -52,7 +52,19 @@ function bytes(v: number, decimals: number | null): string {
   return `${number(v / BYTE_FACTORS[i], decimals)} ${BYTE_UNITS[i]}`;
 }
 
-export function formatValue(v: number | null, unit: Unit, decimals: number | null): string {
+/**
+ * CPU in millicores while the largest value shown is under one core (`347 m`), else in cores.
+ * `largest` is what the axis or tooltip shows, so one unit serves all of it; 0.9996 never prints
+ * "1000 m" (it rounds up to cores).
+ */
+const inMillicores = (largest: number, decimals: number | null) =>
+  Math.abs(largest) < 1 && Math.abs(Number(number(largest * 1000, decimals))) < 1000;
+
+/**
+ * `shared`: the largest magnitude among the values shown together (an axis, a tooltip), so they all
+ * take one unit (only CPU cores has more than one way to read).
+ */
+export function formatValue(v: number | null, unit: Unit, decimals: number | null, shared?: number): string {
   if (v === null || !Number.isFinite(v)) return NO_VALUE;
   switch (unit) {
     case "none":
@@ -73,6 +85,7 @@ export function formatValue(v: number | null, unit: Unit, decimals: number | nul
     case "reqps":
       return `${si(v, decimals)} req/s`;
     case "cores": {
+      if (inMillicores(Math.max(Math.abs(v), shared ?? 0), decimals)) return `${number(v * 1000, decimals)} m`;
       const text = number(v, decimals);
       return `${text} ${text === "1" ? "core" : "cores"}`;
     }

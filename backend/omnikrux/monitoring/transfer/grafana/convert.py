@@ -16,7 +16,7 @@ from omnikrux.monitoring.dashboards.schema import (
 )
 from omnikrux.monitoring.transfer.grafana.alerts import PanelInfo, legacy_draft, unified_drafts
 from omnikrux.monitoring.transfer.grafana.datasources import GrafanaContext
-from omnikrux.monitoring.transfer.grafana.layout import grid_pos, place, rows_layout
+from omnikrux.monitoring.transfer.grafana.layout import compact, grid_pos, place, rows_layout
 from omnikrux.monitoring.transfer.grafana.panels import (
     PanelResult,
     PanelState,
@@ -280,7 +280,10 @@ def _convert(value: object, ctx: GrafanaContext, key: str) -> ConvertedDashboard
     variables = var_result.variables
 
     ctx_doc = {"title": title, "description": description, "time": doc_time, "refresh": refresh}
+    kept = len(entries)
     doc, problems = _validated(ctx_doc, variables, entries, skipped)
+    if doc and len(doc["panels"]) < kept:
+        doc["panels"] = compact(doc["panels"])  # a panel the validator dropped leaves no hole
 
     final_panels = doc["panels"] if doc else []
     used_keys: list[str] = []

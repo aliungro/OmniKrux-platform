@@ -1,16 +1,22 @@
 /* Charts: the plot, its crosshair and tooltip, and the legend. Territories tokens only. */
+
+/* The plot layer (canvas, axes, legend) clips to the chart's box, with room for a focus ring; the
+   tooltip is not in it (it is fixed on the page), so a short panel never cuts it. */
 .chart {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
+/* Shrinks with its panel: a short plot draws no labels (drawTimeSeries) rather than spill. */
 .plotWrap {
   position: relative;
   flex: 1 1 auto;
-  min-height: 72px;
+  min-height: 0;
 }
 
 .plot {
@@ -51,11 +57,14 @@
   user-select: none;
 }
 
+/* On the page, above the panels, their scroll areas and a chart's own popover. A tip shows only
+   while its chart is hovered or focused and in view (it goes on blur, mouse leave, Esc, and when
+   the chart scrolls out of the window or the page area); placed against the window. */
 .tip {
-  position: absolute;
-  z-index: 2;
+  position: fixed;
+  z-index: 55;
   min-width: 120px;
-  max-width: min(320px, 70%);
+  max-width: min(420px, calc(100vw - 16px));
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--rule);
@@ -72,14 +81,6 @@
   display: none;
 }
 
-.tipLeft {
-  transform: translateX(calc(-100% - 12px));
-}
-
-.tipRight {
-  transform: translateX(12px);
-}
-
 .tipTime {
   margin: 0 0 6px;
   color: var(--ink-3);
@@ -93,14 +94,15 @@
   list-style: none;
 }
 
+/* One line per series: swatch, name (cut to fit), value (never cut, right-aligned). */
 .tipRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  column-gap: 8px;
 }
 
 .tipName {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--ink-2);
@@ -109,8 +111,20 @@
 }
 
 .tipValue {
-  flex: none;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The series highlighted from the legend. */
+.tipLit .tipName {
+  color: var(--ink);
+}
+
+.tipMore {
+  margin: 6px 0 0;
+  color: var(--ink-3);
 }
 
 .swatch {
@@ -120,22 +134,35 @@
   border-radius: 2px;
 }
 
+/* At most two rows (22 px items, 2 px apart); more scrolls. */
 .legend {
   display: flex;
   flex: none;
   flex-wrap: wrap;
   gap: 2px 4px;
-  max-height: 76px;
-  margin: 6px 0 0;
+  max-height: 46px;
+  margin: 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
 }
 
+/* The legend's root while it doesn't fold. */
+.legendBox {
+  flex: none;
+  min-width: 0;
+  margin: 6px 0 0;
+}
+
+.legendEntry {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .legendItem {
   display: inline-flex;
   align-items: center;
-  max-width: 100%;
+  max-width: min(100%, 24ch);
   gap: 6px;
   padding: 2px 8px;
   border: 1px solid transparent;
@@ -145,9 +172,11 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+  line-height: 16px;
 }
 
-.legendItem:hover {
+.legendItem:hover,
+.legendLit {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: var(--ink);
 }
@@ -166,9 +195,68 @@
 }
 
 .legendName {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Past twelve series: one "{n} series" button that opens the full list under it. */
+.legendFold {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  margin: 6px 0 0;
+}
+
+.legendFold .legend {
+  align-self: stretch;
+  margin-top: 4px;
+}
+
+.legendToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.legendToggle:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.legendToggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* A small caret: points right while folded, down while open. */
+.legendChevron {
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.legendToggle[aria-expanded="true"] .legendChevron {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .legendChevron { transition: none; }
 }
 
 /* Stat and gauge tiles */
@@ -454,6 +542,13 @@
   user-select: none;
 }
 
+.thText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .th:hover {
   color: var(--ink);
 }
@@ -612,12 +707,8 @@
   display: flex;
   flex: none;
   flex-wrap: wrap;
-  max-height: 84px;
-  margin: 6px 0 0;
   padding: 6px 8px;
   gap: 4px 14px;
-  overflow-y: auto;
-  border-top: 1px solid var(--rule);
   color: var(--ink-2);
   font-family: "Geist Mono", ui-monospace, monospace;
   font-size: 11px;
@@ -729,4 +820,69 @@
 
 .miniLogTime {
   color: var(--ink-3);
+}
+
+/* A line's stream, when the lines come from more than one. */
+.logTag {
+  flex: none;
+  max-width: 18ch;
+  overflow: hidden;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The opened line: its full text first (wrapped, selectable), then its labels. */
+.logOpen {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  max-height: 45%;
+  margin: 6px 0 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--rule);
+}
+
+.logFull {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px 0;
+}
+
+.logFullText {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 120px;
+  margin: 0;
+  overflow-y: auto;
+  color: var(--ink);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.logCopy {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.logCopy:hover {
+  border-color: var(--focus);
+}
+
+.logCopy:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }

@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GroupOut } from "../../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../../test/fakeMonitoringApi";
@@ -14,6 +16,21 @@ vi.mock("../../charts", async () => {
   const { createElement } = await import("react");
   return { default: ({ data }: { data: { series: unknown[] } }) => createElement("span", null, `chart ${data.series.length}`) };
 });
+
+// CodeMirror does not run in jsdom: the JSON editor is a textarea.
+vi.mock("../../../features/actions/lazyCodeMirror", () => ({
+  loadCodeMirror: () => Promise.resolve({
+    mergeView: () => ({ destroy: () => {} }),
+    editor: (parent: HTMLElement, doc: string, onChange: (text: string) => void, label: string) => {
+      const area = document.createElement("textarea");
+      area.value = doc;
+      area.setAttribute("aria-label", label);
+      area.addEventListener("input", () => onChange(area.value));
+      parent.append(area);
+      return { focus: () => area.focus(), destroy: () => area.remove() };
+    },
+  }),
+}));
 
 beforeEach(() => { localStorage.clear(); editSessions.clear(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -48,6 +65,7 @@ const draftPanel = (id: string): PanelSpec => {
   return s.draft.panels.find((p) => p.id === id)!;
 };
 const settings = () => screen.getByRole("complementary", { name: "Panel settings" });
+const notBody = () => expect(document.activeElement).not.toBe(document.body);
 const tabNamed = (name: string) => within(settings()).getByRole("tab", { name });
 
 async function editing(api = shop()) {
@@ -80,8 +98,10 @@ describe("The panel side panel", () => {
     const tablist = within(aside).getByRole("tablist", { name: "Panel settings" });
     expect(within(tablist).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Query", "Chart", "Options", "Alert"]);
     const query = tabNamed("Query");
-    expect(document.activeElement).toBe(query);
+    expect(document.activeElement).toBe(within(aside).getByRole("textbox", { name: "Query A" }));
     expect(query.getAttribute("aria-selected")).toBe("true");
+    // ←/→ move between tabs once the keyboard is on one.
+    query.focus();
     // ←/→ move between tabs; the keyboard stays on the tabs.
     await user.keyboard("{ArrowRight}");
     expect(document.activeElement).toBe(tabNamed("Chart"));
@@ -91,7 +111,7 @@ describe("The panel side panel", () => {
     // A project dashboard: its first source of each type that exists, then each linked source.
     const source = within(aside).getByRole("combobox", { name: "Source" });
     expect(within(source).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "First Prometheus-compatible source (s1 name)",
+      "Default: s1 name",
       "s1 name",
     ]);
     expect(within(aside).getByRole("textbox", { name: "Query A" })).toBeTruthy();
@@ -131,7 +151,7 @@ describe("The panel side panel", () => {
   it("the Query tab never offers an Alertmanager", () => {
     const project = { ...linkedProject("p1", "Shop", "s1"), links: [linkTo("s1"), linkTo("am", "alertmanager")] };
     const choices = sourceChoices({ kind: "project", project }, "project", { type: "prometheus", id: null });
-    expect(choices.map((c) => c.label)).toEqual(["First Prometheus-compatible source (s1 name)", "s1 name"]);
+    expect(choices.map((c) => c.label)).toEqual(["Default: s1 name", "s1 name"]);
   });
 
   it("group source choices are per project", async () => {
@@ -153,6 +173,15 @@ describe("The panel side panel", () => {
     await user.click(field);
     await user.keyboard("{End}2{Control>}{Enter}{/Control}");
     await waitFor(() => expect(batches(api).at(-1)?.body).toMatchObject({ queries: [{ query: "up2", project_id: "p1" }, { query: "up2", project_id: "p2" }] }));
+  });
+
+  it("the Style select offers Bars", async () => {
+    const { user } = await openSettings();
+    await user.click(tabNamed("Chart"));
+    const style = within(settings()).getByRole("combobox", { name: "Style" });
+    expect(within(style).getAllByRole("option").map((o) => o.textContent)).toEqual(["Lines", "Area", "Stacked", "Bars"]);
+    await user.selectOptions(style, "Bars");
+    expect((draftPanel("p-1").options as { style: string }).style).toBe("bars");
   });
 
   it("changing type keeps queries and unit", async () => {
@@ -265,5 +294,214 @@ describe("The panel side panel", () => {
     expect(panel.textContent).toBe("This panel has no alert.Add an alert");
     expect(within(panel).getAllByRole("button").map((b) => b.textContent)).toEqual(["Add an alert"]);
     expect(document.activeElement).toBe(tabNamed("Alert"));
+  });
+});
+
+describe("A log query in a chart panel", () => {
+  const LOGS = "{job=\"omnikrux-live-check\"}";
+  const RATE = "sum(count_over_time({job=\"x\"}[5m]))";
+  const WARNING = "This is a log query: it lists lines, and a chart can't draw lines.";
+  const lines = { result_type: "streams" as const, streams: [{ labels: { job: "omnikrux-live-check" }, entries: [["1700000000000000000", "hello"]] as [string, string][] }] };
+  const lokiPanel = (id: string, title: string, expr: string, x: number) => {
+    const p = panel(id, title, expr, { x, y: 0, w: 12, h: 8 });
+    p.queries[0].source = { type: "loki", id: null };
+    return p;
+  };
+
+  function lokiShop(panels: PanelSpec[]): FakeMonitoringApi {
+    return installFakeMonitoringApi({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      // A chart beside them, so the page has drawn something (a log panel in a chart says a note instead).
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("Logs", [...panels, lokiPanel("p-9", "Rate", RATE, 12)])) },
+      queryAnswers: { [LOGS]: lines, [RATE]: ok },
+    }, async () => json([]));
+  }
+  const note = () => within(settings()).queryByRole("note");
+
+  it("a log query in a chart panel warns and offers a logs panel", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    const warning = within(settings()).getByRole("note");
+    expect(warning.textContent).toContain(WARNING);
+    expect(within(warning).getByRole("button", { name: "Switch to a logs panel" })).toBeTruthy();
+    // Above the queries; a log query has no legend, but can still be hidden.
+    expect(warning.compareDocumentPosition(within(settings()).getByRole("textbox", { name: "Query A" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(settings()).queryByRole("textbox", { name: "Query A legend" })).toBeNull();
+    expect(within(settings()).getByRole("checkbox", { name: "Hide query A" })).toBeTruthy();
+    void user;
+  });
+
+  it("Switch to a logs panel keeps the query and moves the keyboard to it", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    await user.click(within(settings()).getByRole("button", { name: "Switch to a logs panel" }));
+    expect(draftPanel("p-1").type).toBe("logs");
+    expect(draftPanel("p-1").queries.map((q) => q.expr)).toEqual([LOGS]);
+    expect(note()).toBeNull();
+    expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: "Query A" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the switch keeps the log query when it is not the first", async () => {
+    const mixed = lokiPanel("p-1", "Mixed", "sum(count_over_time({job=\"x\"}[5m]))", 0);
+    mixed.queries.push({ ref: "B", source: { type: "loki", id: null }, expr: LOGS, legend: "", hidden: false });
+    const { user } = await openSettings(lokiShop([mixed]));
+    await user.click(within(settings()).getByRole("button", { name: "Switch to a logs panel" }));
+    expect(draftPanel("p-1").queries.map((q) => q.expr)).toEqual([LOGS]);
+    expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: /^Query/ }));
+  });
+
+  it("the note says which queries the switch removes", async () => {
+    const mixed = lokiPanel("p-1", "Mixed", RATE, 0);
+    mixed.queries.push({ ref: "B", source: { type: "loki", id: null }, expr: LOGS, legend: "", hidden: false });
+    mixed.queries.push({ ref: "C", source: { type: "loki", id: null }, expr: RATE, legend: "", hidden: false });
+    await openSettings(lokiShop([mixed]));
+    expect(note()!.textContent).toContain("A logs panel reads one query: switching removes queries A and C (Undo brings them back).");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the switch is refused while the JSON doesn't apply", async () => {
+    const { user } = await openSettings(lokiShop([lokiPanel("p-1", "Lines", LOGS, 0)]));
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const area = await screen.findByRole("textbox", { name: "Dashboard JSON" }) as HTMLTextAreaElement;
+    fireEvent.input(area, { target: { value: "{ nope" } });
+    await waitFor(() => expect(screen.getByTestId("json-state").textContent).toMatch(/^✗/));
+    // The settings close behind the JSON tab; back on the dashboard they open again, the JSON still unapplied.
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    tile("Lines").focus();
+    await user.keyboard("{Enter}");
+    const button = within(settings()).getByRole("button", { name: "Switch to a logs panel" });
+    await user.click(button);
+    expect(within(settings()).getByRole("alert").textContent).toBe("Fix the JSON first, or discard it.");
+    expect(draftPanel("p-1").type).toBe("timeseries");
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("a LogQL metric query in a chart panel gets no warning", async () => {
+    await openSettings(lokiShop([lokiPanel("p-1", "Rate", "sum(count_over_time({job=\"x\"}[5m]))", 0)]));
+    expect(note()).toBeNull();
+    expect(within(settings()).getByRole("textbox", { name: "Query A legend" })).toBeTruthy();
+  });
+
+  it("the default source shows its own name", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [{ ...linkedProject("p1", "Shop"), links: [{ ...linkTo("l1", "loki"), source_name: "Loki · kind-omnikrux-dev" }] }],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("Logs", [lokiPanel("p-1", "Lines", LOGS, 0), lokiPanel("p-9", "Rate", RATE, 12)])) },
+      queryAnswers: { [LOGS]: lines, [RATE]: ok },
+    }, async () => json([]));
+    await openSettings(api);
+    const options = within(within(settings()).getByRole("combobox", { name: "Source" })).getAllByRole("option").map((o) => o.textContent);
+    expect(options[0]).toBe("Default: Loki · kind-omnikrux-dev");
+  });
+
+  it("a project with no source of that type says none is linked", () => {
+    const project = linkedProject("p1", "Shop", "s1");
+    expect(sourceChoices({ kind: "project", project }, "project", { type: "loki", id: null }).map((c) => c.label))
+      .toEqual(["Default: s1 name", "s1 name", "Default Loki source (none linked)"]);
+    expect(sourceChoices({ kind: "project", project: { ...project, links: [] } }, "project", { type: "prometheus", id: null })[0].label)
+      .toBe("Default Prometheus-compatible source (none linked)");
+  });
+});
+
+describe("Opening the settings", () => {
+  it("Enter on a tile moves into the settings", async () => {
+    const { user } = await editing();
+    await user.keyboard("{Enter}");
+    const aside = settings();
+    // The keyboard is in the settings' first text field, ready to type: not left on the tile or the tab.
+    const query = within(aside).getByRole("textbox", { name: "Query A" });
+    await waitFor(() => expect(document.activeElement).toBe(query));
+    expect(aside.contains(document.activeElement)).toBe(true);
+    notBody();
+    // The same from the tile's menu.
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(tile("Requests"));
+    await user.click(within(tile("Requests")).getByRole("button", { name: "Panel actions for Requests" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
+    await waitFor(() => expect(document.activeElement).toBe(within(settings()).getByRole("textbox", { name: "Query A" })));
+  });
+
+  it("a new panel is scrolled into view", async () => {
+    const scrolled: Element[] = [];
+    const had = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = function (this: Element) { scrolled.push(this); };
+    try {
+      const { user } = await editing();
+      await user.keyboard("a");
+      await screen.findByRole("combobox", { name: "What do you want to see" });
+      await user.keyboard("{Control>}{End}{/Control}{Enter}");
+      await screen.findByRole("textbox", { name: "Query A" });
+      await waitFor(() => expect(scrolled.includes(tile("New panel"))).toBe(true));
+      notBody();
+    } finally {
+      if (had) Object.defineProperty(Element.prototype, "scrollIntoView", had);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  it("settings selects carry their text as a title", async () => {
+    await openSettings();
+    const source = within(settings()).getByRole("combobox", { name: "Source" }) as HTMLSelectElement;
+    expect(source.title).toBe(source.selectedOptions[0].textContent);
+  });
+});
+
+describe("Narrow settings", () => {
+  const rect = (top: number, bottom: number) =>
+    ({ top, bottom, left: 0, right: 700, width: 700, height: bottom - top, x: 0, y: top, toJSON() {} }) as DOMRect;
+
+  it("narrow settings start below the dashboard header", async () => {
+    // The page area is 100–700 in the window; the dashboard header ends at 160; the settings sit at
+    // 300 (the page is scrolled to its top, so the header and the variables bar are above them).
+    let asideTop = 300;
+    const real = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches("[data-monitoring-page]")) return rect(100, 700);
+      if (this.matches("[data-monitoring-page] > section > header")) return rect(100, 160);
+      if (this.matches('aside[aria-label="Panel settings"]')) return rect(asideTop, asideTop + 200);
+      return real.call(this);
+    });
+    await openSettings();
+    const aside = settings();
+    // From below the header to the bottom of the page area (not the window): Discard and Save, in
+    // the header, stay in view, and the last line is never under the status bar.
+    await waitFor(() => expect(aside.style.getPropertyValue("--sheet-top")).toBe("60px"));
+    expect(aside.style.getPropertyValue("--sheet-h")).toBe("400px");
+    expect(screen.getByRole("button", { name: "Save dashboard" })).toBeTruthy();
+    // Scrolled until the settings meet the header: the sheet grows to reach the page's bottom.
+    asideTop = 160;
+    const page = document.querySelector("[data-monitoring-page]") as HTMLElement;
+    act(() => { fireEvent.scroll(page); });
+    // Placed again on the next frame.
+    await waitFor(() => expect(aside.style.getPropertyValue("--sheet-h")).toBe("540px"));
+    notBody();
+    // The settings overlay is one state (the grid frame's query, which every viewport under 960 px
+    // meets), drawn as this sheet.
+    const css = readFileSync(join(process.cwd(), "src", "monitoring", "dashboards", "editor", "SidePanel.module.css"), "utf8");
+    const overlay = css.slice(css.indexOf("@container (max-width: 1093px)"));
+    expect(overlay).toMatch(/top: var\(--sheet-top/);
+    expect(overlay).toMatch(/height: var\(--sheet-h/);
+    // The wide column keeps its own limits.
+    expect(css.slice(0, css.indexOf("@container"))).not.toMatch(/var\(--sheet-/);
+    expect(css).not.toMatch(/@media \(max-width: 959px\)/);
+  });
+});
+
+describe("Panel settings width", () => {
+  // jsdom lays nothing out: the rules that keep the query box inside the sheet are checked as
+  // written (the browser confirms the box ends inside the column at 1280 and 700 px).
+  const css = readFileSync(join(process.cwd(), "src", "monitoring", "dashboards", "editor", "SidePanel.module.css"), "utf8");
+  const rule = (selector: string) => {
+    const at = css.search(new RegExp(`(^|\n)${selector.replace(".", "\.")} \{`));
+    expect(at, selector).toBeGreaterThanOrEqual(0);
+    return css.slice(at, css.indexOf("}", at));
+  };
+
+  it("the query box and the fields around it never grow past the sheet", () => {
+    for (const selector of [".code", ".input,\n.select,\n.source"]) {
+      const r = selector.startsWith(".code") ? rule(".code") : css.slice(css.indexOf(selector), css.indexOf("}", css.indexOf(selector)));
+      expect(r, selector).toMatch(/box-sizing: border-box/);
+      expect(r, selector).toMatch(/min-width: 0/);
+      expect(r, selector).toMatch(/width: 100%/);
+    }
+    for (const selector of [".rows", ".queries", ".query", ".run"]) expect(rule(selector), selector).toMatch(/min-width: 0/);
   });
 });

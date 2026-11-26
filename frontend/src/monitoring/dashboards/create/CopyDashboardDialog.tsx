@@ -6,6 +6,11 @@ import { copyDashboard, type DashboardOut } from "../api";
 import { OwnerDialog } from "./NewDashboardDialog";
 
 export const ALERTS_NOT_COPIED = "Alerts aren't copied; add them on the copy's panels.";
+const SUFFIX = " (copy)";
+const MAX_TITLE = 120;
+
+/** `{title} (copy)`, with the title cut so that the whole fits in 120 characters. */
+export const copyTitle = (title: string) => `${[...title].slice(0, MAX_TITLE - SUFFIX.length).join("").trimEnd()}${SUFFIX}`;
 
 export function CopyDashboardDialog({ dashboard, restoreFocusTo, onCancel, onCopied }: {
   dashboard: DashboardOut;
@@ -13,7 +18,7 @@ export function CopyDashboardDialog({ dashboard, restoreFocusTo, onCancel, onCop
   onCancel(): void;
   onCopied(out: DashboardOut): void;
 }) {
-  const title = `${dashboard.title} (copy)`;
+  const title = copyTitle(dashboard.title);
   const owner = { kind: dashboard.owner_kind, id: dashboard.owner_id, name: dashboard.owner_name };
   return (
     <OwnerDialog heading="Copy dashboard" action="Create copy" busyAction="Copying…" owner={owner}

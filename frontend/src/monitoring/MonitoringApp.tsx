@@ -1,11 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { useClusters } from "../api/useClusters";
 import type { TabNav } from "../features/shell/browserHistory";
 import type { AppTabs } from "../features/shell/workspace";
 import { useMonitoringTree, useSources } from "./api/hooks";
 import type { SourceOut, TreeOut } from "./api/types";
-import { pressed } from "../features/chrome/shortcuts";
-import { focusMainFrom } from "./focus";
+import { pageKey, pressed } from "../features/chrome/shortcuts";
+import { focusMainFrom, focusNextHeading } from "./focus";
 import { readRecent, recordRecent } from "./home/recent";
 import GroupForm from "./groups/GroupForm";
 import GroupPage from "./groups/GroupPage";
@@ -23,14 +23,15 @@ import { pageLetter } from "./dashboards/page/keys";
 import { ToolReviewHost } from "./alerts/reviews/ToolReviewHost";
 import { InstallReviewHost } from "./install/InstallReviewHost";
 import {
-  clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, pruneRuleForms, RULE_LEAVE_BODY,
+  alertFormMarks, clearAlertForms, endRuleForm, FORM_LEAVE_BODY, heldFormLeave, heldRuleLeave, markAlertForm, pruneRuleForms, RULE_LEAVE_BODY,
+  SETUP_LEAVE_BODY, SETUP_MARK,
 } from "./alerts/rules/formSessions";
 import { Gone, type GoneWhat } from "./pages/Gone";
 import ProjectPage from "./projects/ProjectPage";
 import SourcesPage, { SourcePage } from "./sources/SourcesPage";
 import SetupPage from "./setup/SetupPage";
 import { buildSearchIndex } from "./search/search";
-import { pruneSetupDrafts } from "./setup/setupDraftStore";
+import { pruneSetupDrafts, removeSetupDraft, setupDraftChosen } from "./setup/setupDraftStore";
 import { MonitoringTabs } from "./shell/MonitoringTabs";
 import {
   equalMonitoringView, MONITORING_HOME, monitoringTabLabel, setMonitoringLeaveCheck, setMonitoringSwitchCheck, type MonitoringTabAction,
@@ -64,6 +65,33 @@ export interface MonitoringPageProps {
    * shows `expected`. For a page that leaves with a view change still waiting (Explore's last keys).
    */
   replaceTabView?(tabId: string, view: MonitoringView, expected: MonitoringView): void;
+  /**
+   * The page's item was deleted from this tab: the tab shows Home, or closes when another tab
+   * shows Home already (that one becomes active).
+   */
+  leaveDeleted?(): void;
+  /** A dashboard being edited names tab `tabId` after its draft title; null: its saved name again. */
+  setTabTitle?(tabId: string, title: string | null): void;
+}
+
+/** Ctrl K and the top bar's box in Monitoring (Shell sends it; the same literal there). */
+const MONITORING_FIND_EVENT = "omnikrux:monitoring-find";
+
+/** Up to this width the sidebar folds into a drawer (the same width as the stylesheet's). */
+const NARROW_QUERY = "(max-width: 760px)";
+
+/** Whether the window is narrow enough for the drawer, following it as it changes. */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY).matches : false));
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia(NARROW_QUERY);
+    const on = () => setNarrow(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
+  return narrow;
 }
 
 type Page = MonitoringView["page"];
@@ -159,6 +187,10 @@ interface Leaving {
   rule?: boolean;
   /** A Silences or Contact points form: no draft is kept, Discard lets the page take it away. */
   form?: boolean;
+  /** What leaving loses, when it isn't a dashboard's draft. */
+  body?: string;
+  /** Closing a tab with a setup started in it: Discard drops the tab's setup draft too. */
+  setupDraft?: boolean;
 }
 
 /**
@@ -189,10 +221,19 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   // A closed tab's setup draft goes with it.
   const tabIds = JSON.stringify(tabs.tabs.map((t) => t.id));
   useEffect(() => { pruneSetupDrafts(JSON.parse(tabIds) as string[]); }, [tabIds]);
+  // After a reload, a tab not showing its setup still keeps the draft: it is marked from storage,
+  // so closing it asks as it did before. A setup page on screen marks its own tab.
+  useEffect(() => {
+    const { tabs: t } = latest.current;
+    for (const tab of t.tabs) {
+      if (tab.id === t.active && tab.view.page === "setup") continue;
+      if (!alertFormMarks.get(tab.id)?.has("setup") && setupDraftChosen(tab.id)) markAlertForm(tab.id, "setup", SETUP_MARK);
+    }
+  }, []);
 
   const clusterNames = useMemo(() => Object.fromEntries((clusters ?? []).map((c) => [c.id, c.name])), [clusters]);
   const index = useMemo(
-    () => (tree.data ? buildSearchIndex({ tree: tree.data, sources: sources.data ?? [], clusterNames }) : []),
+    () => (tree.data ? buildSearchIndex({ tree: tree.data, sources: sources.data ?? [], clusterNames, pages: true }) : []),
     [tree.data, sources.data, clusterNames],
   );
   const names = useMemo(() => {
@@ -211,6 +252,24 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       },
     };
   }, [tree.data, sources.data, clusterNames]);
+  // A dashboard being edited names its tab after the draft title (a blank one: the saved name). The
+  // page on screen reports it as it is typed; a tab in the background reads its edit session.
+  const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
+  const setTabTitle = useCallback((id: string, title: string | null) => {
+    const text = title?.trim() || null;
+    setTabTitles((was) => {
+      if ((was[id] ?? null) === text) return was;
+      const next = { ...was };
+      if (text === null) delete next[id];
+      else next[id] = text;
+      return next;
+    });
+  }, []);
+  const tabLabel = (v: MonitoringView, id: string) => {
+    const session = editSessions.get(id);
+    const draft = v.page === "dashboard" && session?.mode === "edit" && session.dashboardId === v.id ? session.draft.title.trim() : "";
+    return (v.page === "dashboard" ? tabTitles[id] : undefined) || draft || names.label(v);
+  };
 
   // A page about to be replaced takes the keyboard with it: hand it to the workspace first, so it
   // never falls to <body>. The tree and Find keep their own focus.
@@ -241,14 +300,18 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     const active = document.activeElement;
     if (rule) {
       setLeaving({
-        tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, proceed,
+        tabId: rule.tabId, dashboardId: "", title: rule.title, draftsWork: false, rule: true, body: RULE_LEAVE_BODY, proceed,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
     }
     if (form) {
+      // A setup started in the tab holds only its closing. Closing it loses the whole setup (a form
+      // open in it included), so the question names that, whichever mark was found.
+      const setup = action.type === "closeTab" ? [...(alertFormMarks.get(form.tabId)?.values() ?? [])].find((m) => m.closeOnly) : undefined;
       setLeaving({
-        tabId: form.tabId, dashboardId: "", title: form.title, draftsWork: false, form: true, proceed,
+        tabId: form.tabId, dashboardId: "", title: setup?.title ?? form.title, draftsWork: false, form: true, proceed, setupDraft: setup !== undefined,
+        body: setup ? SETUP_LEAVE_BODY : FORM_LEAVE_BODY,
         from: active instanceof HTMLElement && active !== document.body ? active : null,
       });
       return true;
@@ -293,8 +356,10 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
       // The form ends first, so the action goes through when performed again.
       if (l.rule) endRuleForm(l.tabId);
       else clearAlertForms(l.tabId);
+      if (l.setupDraft) removeSetupDraft(l.tabId);
       returnFocus.current = root.current?.closest("main") ?? null;
       focusMainFrom(root.current);
+      focusNextHeading(root.current);
       asking.current = false;
       setLeaving(null);
       l.proceed();
@@ -313,6 +378,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     forgetSession(l.tabId);
     returnFocus.current = root.current?.closest("main") ?? null;
     focusMainFrom(root.current);
+    focusNextHeading(root.current);
     asking.current = false;
     setLeaving(null);
     l.proceed();
@@ -351,7 +417,80 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (newTab) openInNewTab(v);
     else pageNav.navigate(v, "push");
   }, [pageNav, openInNewTab]);
-  const leave = useCallback(() => focusMainFrom(root.current), []);
+  // --- The narrow window's drawer: Projects and pages -------------------------------------------
+  // Up to 760 px the sidebar folds away behind the bar's button and the page takes the full height.
+  // Opened, it lies over the page from the left. Choosing a row or a page closes it and the keyboard
+  // goes to the page; Esc, a click outside or Find's Esc close it and the keyboard goes back to the
+  // button; the keyboard leaving it any other way closes it where the keyboard went.
+  const narrow = useNarrow();
+  const drawerId = useId();
+  const drawerButton = useRef<HTMLButtonElement>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Read by handlers that run before a render (Find's choose calls open, then leave).
+  const drawerShown = useRef(false);
+  drawerShown.current = narrow && drawerOpen;
+  const drawerFocus = useRef<"find" | "first" | null>(null);
+  const navOf = useCallback(() => document.getElementById(drawerId), [drawerId]);
+  const openDrawer = useCallback((focus: "find" | "first") => {
+    drawerFocus.current = focus;
+    drawerShown.current = true;
+    setDrawerOpen(true);
+  }, []);
+  /** Closes the drawer; the keyboard goes to the button, to the page, or stays where it went. */
+  const closeDrawer = useCallback((to: "button" | "page" | "stay") => {
+    if (!drawerShown.current) return;
+    drawerShown.current = false;
+    drawerFocus.current = null;
+    // The keyboard first, so it never sits in the drawer as it is hidden.
+    if (to === "button") drawerButton.current?.focus();
+    else if (to === "page") focusMainFrom(root.current);
+    setDrawerOpen(false);
+  }, []);
+  // Wide again: the sidebar is back in its column, and a later fold starts closed.
+  useEffect(() => { if (!narrow) setDrawerOpen(false); }, [narrow]);
+  // Folding with the keyboard in the sidebar (the window narrowed): it goes to the button.
+  useLayoutEffect(() => {
+    if (!narrow || drawerOpen) return;
+    const active = document.activeElement;
+    if (active && navOf()?.contains(active)) drawerButton.current?.focus();
+  }, [narrow, drawerOpen, navOf]);
+  // Opened: the keyboard goes in, to Find or to the open page's row (else the tree's row, else a page).
+  useLayoutEffect(() => {
+    const focus = drawerFocus.current;
+    if (!narrow || !drawerOpen || focus === null) return;
+    drawerFocus.current = null;
+    if (focus === "find") {
+      findInput.current?.focus();
+      return;
+    }
+    const nav = navOf();
+    (nav?.querySelector<HTMLElement>('[role="treeitem"][aria-current="page"]')
+      ?? nav?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]')
+      ?? nav?.querySelector<HTMLElement>('button[aria-current="page"]')
+      ?? nav?.querySelector<HTMLElement>("button"))?.focus();
+  }, [narrow, drawerOpen, navOf]);
+  // A click outside closes it (the scrim takes the press, so nothing behind it is clicked too).
+  useEffect(() => {
+    if (!narrow || !drawerOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const at = e.target as Node | null;
+      if (!at || navOf()?.contains(at) || drawerButton.current?.contains(at)) return;
+      closeDrawer("button");
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [narrow, drawerOpen, closeDrawer, navOf]);
+
+  const leave = useCallback(() => {
+    // Find's Esc in the drawer: it closes, back to its button.
+    if (drawerShown.current) closeDrawer("button");
+    else focusMainFrom(root.current);
+  }, [closeDrawer]);
+  // A row, a page or Find's answer chosen in the drawer: it closes and the keyboard goes to the page.
+  const openFromSidebar = useCallback((v: MonitoringView, newTab: boolean) => {
+    closeDrawer("page");
+    open(v, newTab);
+  }, [open, closeDrawer]);
 
   // --- New dashboard: the L1 bar, N, and the current project's or group's + in the tree --------
   // `view` changes whenever something is opened (and Recently opened with it), so the owner follows.
@@ -360,9 +499,13 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   const [creating, setCreating] = useState<{ owner: Owner | null } | null>(null);
   const createFrom = useRef<HTMLElement | null>(null);
   const newDashboard = useCallback((o: Owner | null, from: HTMLElement | null) => {
-    createFrom.current = from ?? root.current?.closest("main") ?? null;
+    // From the drawer: it closes with the keyboard on its button (never left in the hidden drawer
+    // while the dialog opens), and the dialog gives the keyboard back to that button.
+    const fromDrawer = drawerShown.current && from !== null && navOf()?.contains(from) === true;
+    createFrom.current = (fromDrawer ? drawerButton.current : from) ?? root.current?.closest("main") ?? null;
+    if (fromDrawer) closeDrawer("button");
     setCreating({ owner: o });
-  }, []);
+  }, [closeDrawer, navOf]);
   // N anywhere in Monitoring, outside a field, a dialog, a menu or edit mode.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -390,6 +533,45 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
   }, [owner, pageNav, creating]);
   const goHome = useCallback(() => pageNav.navigate(MONITORING_HOME, "push"), [pageNav]);
 
+  // --- Find: "/", Ctrl K and the top bar's box (MONITORING_FIND_EVENT) -------------------------
+  const findInput = useRef<HTMLInputElement>(null);
+  // The one way to Find. A folded sidebar opens first, and the field takes the keyboard once shown.
+  const openFind = useCallback(() => {
+    if (narrow && !drawerShown.current) {
+      openDrawer("find");
+      return;
+    }
+    findInput.current?.focus();
+  }, [narrow, openDrawer]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!pressed("monitoringFind", e) || !pageKey(e)) return;
+      e.preventDefault();
+      openFind();
+    };
+    document.addEventListener("keydown", onKey);
+    window.addEventListener(MONITORING_FIND_EVENT, openFind);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener(MONITORING_FIND_EVENT, openFind);
+    };
+  }, [openFind]);
+
+  // A project deleted from its own tab: Home takes the tab's place, unless a Home tab is open already.
+  const leaveDeleted = useCallback(() => {
+    const { tabs: t, dispatchTabs: d } = latest.current;
+    const from = t.active;
+    const home = t.tabs.find((x) => x.id !== from && x.view.page === "home");
+    if (!home) {
+      pageNavRef.current?.navigate(MONITORING_HOME, "replace");
+      return;
+    }
+    // What was open about the deleted item has nothing left to hold the tab for.
+    clearAlertForms(from);
+    handOff();
+    if (d({ type: "activateTab", id: home.id }) !== true) d({ type: "closeTab", id: from });
+  }, [handOff]);
+
   // Each tab keeps where its page was scrolled.
   useLayoutEffect(() => {
     if (scroller.current) scroller.current.scrollTop = nav.scrollTop;
@@ -401,18 +583,35 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
     if (!tab || !equalMonitoringView(tab.view, expected)) return;
     latest.current.dispatchTabs({ type: "navigate", id, view: next, mode: "replace" });
   }, []);
-  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView };
+  const page: MonitoringPageProps = { view, tabId, nav: pageNav, openInNewTab, activateTab, onOpenSettings, replaceTabView, leaveDeleted, setTabTitle };
   return (
-    <div ref={root} className={s.app}>
+    <div ref={root} className={s.app} data-narrow={narrow || undefined}>
       {/* Install, uninstall and contact-point reviews, one at a time; around the tool review queue,
           which hands it the contact points' review (F21). */}
       <InstallReviewHost place={`${tabs.active}:${view.page}`}>
       {/* Cluster reviews of tool-run alert rules, one at a time, for every page of the app. */}
       <ToolReviewHost place={`${tabs.active}:${view.page}`}>
+        {narrow && (
+          <div className={s.drawerBar}>
+            <button ref={drawerButton} type="button" className={s.drawerButton} aria-expanded={drawerOpen} aria-controls={drawerId}
+              onClick={() => (drawerShown.current ? closeDrawer("button") : openDrawer("first"))}>
+              <svg className={s.drawerIcon} viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+                <path d="M6 2.75v10.5M3.25 5.75h1.25M3.25 8h1.25M3.25 10.25h1.25" />
+              </svg>
+              Projects and pages
+            </button>
+          </div>
+        )}
         <Sidebar view={view} tree={tree.data} treeFailed={tree.isError && !tree.data} onRetry={() => void tree.refetch()}
-          index={index} onOpen={open} onLeave={leave} owner={owner} onNewDashboard={newDashboard} />
+          index={index} onOpen={openFromSidebar} onLeave={leave} owner={owner} onNewDashboard={newDashboard} findInput={findInput}
+          drawer={narrow ? {
+            id: drawerId, open: drawerOpen, onEscape: () => closeDrawer("button"),
+            onFocusOut: (to) => { if (!drawerButton.current?.contains(to)) closeDrawer("stay"); },
+          } : undefined} />
+        {narrow && drawerOpen && <div className={s.scrim} data-drawer-scrim="" aria-hidden="true" />}
         <div className={s.work}>
-          <MonitoringTabs tabs={tabs} labelFor={names.label} colorFor={names.color}
+          <MonitoringTabs tabs={tabs} labelFor={tabLabel} colorFor={names.color}
             onActivate={(id) => dispatchTabs({ type: "activateTab", id })}
             onClose={(id) => dispatchTabs({ type: "closeTab", id }) === true}
             onNew={() => dispatchTabs({ type: "newTab" })} />
@@ -427,7 +626,7 @@ export default function MonitoringApp({ tabs, nav, dispatchTabs, onOpenSettings 
         )}
         {leaving && (
           <LeaveDialog title={leaving.title} draftsWork={leaving.draftsWork} restoreFocusTo={returnFocus}
-            body={leaving.rule ? RULE_LEAVE_BODY : leaving.form ? FORM_LEAVE_BODY : undefined}
+            body={leaving.body}
             onStay={() => answer("stay")} onDiscard={() => answer("discard")} onKeep={() => answer("keep")} />
         )}
       </ToolReviewHost>

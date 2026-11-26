@@ -43,6 +43,24 @@ export function grafanaWhere(g: GrafanaOut | GrafanaIn, clusterName?: string): s
   return `${cluster} · ${g.namespace ?? ""}/${g.service ?? ""}:${g.port ?? ""}`;
 }
 
+/** Where a row says a connection is: the cluster is left out when the connection's name already holds it. */
+export function rowWhere(g: GrafanaOut): string {
+  if (g.reach === "cluster" && g.cluster_name && g.name.includes(g.cluster_name)) return `${g.namespace ?? ""}/${g.service ?? ""}:${g.port ?? ""}`;
+  return grafanaWhere(g);
+}
+
+/** A connection in a list of choices: its name, then where. A cluster's name is in the connection's own name, so only the service follows. */
+export function connectionLabel(g: GrafanaOut): string {
+  if (g.reach === "url") return `${g.name} · ${g.url ?? ""}`;
+  return `${g.name} · ${g.namespace ?? ""}/${g.service ?? ""}:${g.port ?? ""}`;
+}
+
+/** What starts in the in-cluster fields (where Grafana's own chart puts it). */
+export const CLUSTER_DEFAULTS = { namespace: "monitoring", service: "grafana", port: "80" } as const;
+export const enterWords = (field: "namespace" | "service" | "port") => `Enter the ${field}.`;
+export const sameGrafanaWords = (name: string) => `${name} already connects to this Grafana.`;
+export const handOverWords = (other: string) => `Dashboards imported from it can update from ${other} instead.`;
+
 /** A test's answer in words, and whether it connected. */
 export function testWords(out: GrafanaTestOut): { ok: boolean; text: string } {
   if (out.ok) return { ok: true, text: `Connected · Grafana ${out.version ?? "unknown"} · ${dashboardsWord(out.dashboards ?? 0)}` };

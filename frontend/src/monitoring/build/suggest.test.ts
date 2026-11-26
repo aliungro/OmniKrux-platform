@@ -6,12 +6,12 @@ import type { OwnerKind } from "../dashboards/schema";
 import { candidatePanel } from "./candidates";
 import { buildFinderIndex, findPanels } from "./finder";
 import { MAX_SUGGESTIONS, pickRequestCounter, suggestPanels, suggestionsHeading } from "./suggest";
-import { CAT, KIND, catalog, counter, gauge, streamOf } from "./testCatalogs";
+import { CAT, KIND, catalog, counter, family, gauge, streamOf } from "./testCatalogs";
 
 describe("suggestPanels", () => {
   it("suggestions appear only when their metrics exist", () => {
     expect(suggestPanels(CAT).map((c) => c.key)).toEqual([
-      "requestRate", "errorRate", "latencyP95", "podRestarts", "logVolume", "memoryByPod", "errorLogs",
+      "requestRate", "errorRate", "latencyP95", "podRestarts", "memoryByPod", "logVolume", "errorLogs",
     ]);
     expect(suggestPanels(catalog([gauge("up", ["job"])], [])).map((c) => c.key)).toEqual(["targetsDown"]);
     expect(suggestPanels(catalog([]))).toEqual([]);
@@ -29,7 +29,7 @@ describe("suggestPanels", () => {
     expect(s.podRestarts).toBe("topk(5, sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total[1h])))");
     expect(s.logVolume).toBe('sum by (level) (count_over_time({app=~".+"}[$__interval]))');
     expect(s.memoryByPod).toBe('topk(10, sum by (namespace, pod) (container_memory_working_set_bytes{container!=""}))');
-    expect(s.errorLogs).toBe('{app=~".+"} |~ "(?i)(error|fatal|panic)"');
+    expect(s.errorLogs).toBe('{app=~".+",level=~"(?i)(error|err|fatal|critical|crit)"}');
   });
 
   it("the kind cluster's catalog gives the walkthrough's suggestions", () => {
@@ -44,7 +44,10 @@ describe("suggestPanels", () => {
       title: "Node CPU busy",
       expr: '1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[$__rate_interval]))',
     });
-    expect(s.find((c) => c.key === "targetsDown")!.expr).toBe("count(up == 0) or vector(0)");
+    // With Loki the log suggestions take the last two places; without it, Targets down is offered.
+    expect(s.find((c) => c.key === "targetsDown")).toBeUndefined();
+    const promOnly = suggestPanels(catalog(KIND.metrics));
+    expect(promOnly.find((c) => c.key === "targetsDown")!.expr).toBe("count(up == 0) or vector(0)");
     expect(s.find((c) => c.key === "logVolume")!.expr).toBe('sum by (level) (count_over_time({job=~".+"}[$__interval]))');
     expect(s.length).toBeLessThanOrEqual(MAX_SUGGESTIONS);
   });
@@ -72,10 +75,59 @@ describe("suggestPanels", () => {
     expect(pick(counter("jobs_total", []))).toBeNull();
   });
 
-  it("the heading names what the sources are", () => {
-    expect(suggestionsHeading("prod-east", CAT)).toBe("Suggested for prod-east · from what Prometheus and Loki have");
-    expect(suggestionsHeading("p", catalog([gauge("up", [])]))).toBe("Suggested for p · from what Prometheus have");
-    expect(suggestionsHeading("p", catalog([], [streamOf("a", ["b"])]))).toBe("Suggested for p · from what Loki have");
+  it("the heading names only the sources suggestions come from", () => {
+    expect(suggestionsHeading("prod-east", suggestPanels(CAT))).toBe("Suggested for prod-east · from what Prometheus and Loki have");
+    expect(suggestionsHeading("p", suggestPanels(catalog([gauge("up", [])])))).toBe("Suggested for p · from what Prometheus has");
+    expect(suggestionsHeading("p", suggestPanels(catalog([], [streamOf("a", ["b"])])))).toBe("Suggested for p · from what Loki has");
+    // Loki is linked but nothing can be written from it: only Prometheus is named.
+    const unreadable = catalog([gauge("up", [])], [streamOf("not-a-label", ["x"])]);
+    expect(unreadable.hasLoki).toBe(true);
+    expect(suggestionsHeading("p", suggestPanels(unreadable))).toBe("Suggested for p · from what Prometheus has");
+    expect(suggestionsHeading("p", [])).toBe("Suggested for p");
+  });
+
+  it("log suggestions appear when Loki has streams", () => {
+    const every = [
+      counter("http_requests_total", ["route", "status"], 40),
+      family("http_request_duration_seconds", "histogram", ["route"]),
+      counter("kube_pod_container_status_restarts_total", ["namespace", "pod"]),
+      counter("container_cpu_usage_seconds_total", ["namespace", "pod", "container"]),
+      gauge("container_memory_working_set_bytes", ["namespace", "pod", "container"]),
+      counter("node_cpu_seconds_total", ["instance", "mode"]),
+      gauge("up", ["job"]),
+    ];
+    // Every Prometheus rule matches: eight of them, and nothing from Loki.
+    expect(suggestPanels(catalog(every)).map((c) => c.key)).toEqual([
+      "requestRate", "errorRate", "latencyP95", "podRestarts", "cpuByPod", "memoryByPod", "nodeCpu", "targetsDown",
+    ]);
+    // With Loki streams: six Prometheus ones, then both log suggestions.
+    const both = suggestPanels(catalog(every, [streamOf("k8s_namespace_name", ["shop"])]));
+    expect(both.map((c) => c.key)).toEqual([
+      "requestRate", "errorRate", "latencyP95", "podRestarts", "cpuByPod", "memoryByPod", "logVolume", "errorLogs",
+    ]);
+    expect(both).toHaveLength(MAX_SUGGESTIONS);
+    // Without a level label the error lines are found by their words.
+    expect(both.at(-1)).toMatchObject({
+      expr: '{k8s_namespace_name=~".+"} |~ "(?i)(error|fatal|panic)"', subtitle: 'Loki · |~ "error"', sourceType: "loki",
+    });
+  });
+
+  it("OTel stream labels are picked first", () => {
+    const otel = catalog([], [
+      streamOf("app", ["a"]), streamOf("k8s_container_name", ["c"]), streamOf("k8s_namespace_name", ["shop"]),
+      streamOf("k8s_pod_name", ["p"]), streamOf("level", ["error"]), streamOf("namespace", ["old"]), streamOf("service_name", ["s"]),
+    ]);
+    const s = Object.fromEntries(suggestPanels(otel).map((c) => [c.key, c]));
+    expect(s.logVolume.expr).toBe('sum by (level) (count_over_time({k8s_namespace_name=~".+"}[$__interval]))');
+    expect(s.errorLogs).toMatchObject({
+      expr: '{k8s_namespace_name=~".+",level=~"(?i)(error|err|fatal|critical|crit)"}',
+      subtitle: "Loki · level is error, fatal or critical",
+    });
+    // The classic set, then the container labels.
+    const classic = catalog([], [streamOf("container", ["c"]), streamOf("k8s_container_name", ["c"]), streamOf("service_name", ["s"])]);
+    expect(suggestPanels(classic)[0].expr).toBe('sum by (service_name) (count_over_time({service_name=~".+"}[$__interval]))');
+    const containers = catalog([], [streamOf("container", ["c"]), streamOf("k8s_container_name", ["c"])]);
+    expect(suggestPanels(containers)[0].expr).toBe('sum by (k8s_container_name) (count_over_time({k8s_container_name=~".+"}[$__interval]))');
   });
 });
 
@@ -93,7 +145,7 @@ describe("candidatePanel", () => {
     expect(by.errorRate.options).toMatchObject({ unit: "percentunit", max: 1 });
     expect(by.errorLogs.options).toEqual({ limit: 100, wrap: true, order: "newest" });
     expect(by.requestRate.layout).toBeUndefined();
-    const down = candidatePanel(suggestPanels(KIND).find((c) => c.key === "targetsDown")!, "p-1", "project");
+    const down = candidatePanel(suggestPanels(catalog(KIND.metrics)).find((c) => c.key === "targetsDown")!, "p-1", "project");
     expect(down.options).toMatchObject({ thresholds: [{ value: 1, color: "bad" }] });
   });
 
@@ -111,5 +163,21 @@ describe("candidatePanel", () => {
         }
       }
     }
+  });
+});
+
+describe("suggestion legends", () => {
+  it("legends name the grouping labels, never the query", () => {
+    const s = Object.fromEntries(suggestPanels(catalog([
+      counter("http_requests_total", ["route", "status"]),
+      family("http_request_duration_seconds", "histogram", ["route"]),
+      gauge("container_memory_working_set_bytes", ["namespace", "pod", "container"]),
+    ], [streamOf("level", ["error"]), streamOf("app", ["a"])])).map((c) => [c.key, c]));
+    expect(s.requestRate.legend).toBe("{{route}}");
+    expect(s.errorRate.legend).toBe("Error rate");
+    expect(s.latencyP95.legend).toBe("p95 latency");
+    expect(s.memoryByPod.legend).toBe("{{namespace}} {{pod}}");
+    expect(s.logVolume.legend).toBe("{{level}}");
+    for (const c of Object.values(s)) expect(c.legend).not.toMatch(/rate\(|\{app/);
   });
 });

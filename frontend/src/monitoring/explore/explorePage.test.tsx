@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryResponse } from "../api/types";
+import { catalogOf, metric, source } from "../catalog/fixtures";
 import { recordRecent } from "../home/recent";
 import { gate, intercept, linkedProject, linkTo, seedDashboard, spec } from "../test/dashboardSeeds";
 import { installFakeMonitoringApi, type FakeMonitoringApi, type FakeQueryAnswer } from "../test/fakeMonitoringApi";
@@ -63,6 +64,31 @@ async function openExplore(view: ExploreView = { page: "explore", project: "p1",
 }
 
 describe("Explore", () => {
+  it("a second click on the time button closes the menu, and Esc and Tab away still do", async () => {
+    installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1")] }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1" });
+    const button = await screen.findByRole("button", { name: /Last 1 hour/ });
+    await user.click(button);
+    expect(screen.getByRole("menu", { name: "Time range" })).toBeTruthy();
+    await user.click(button);
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await user.click(button);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    await user.click(button);
+    // Shift+Tab back to the button closes the menu as before.
+    await user.tab({ shift: true });
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull());
+    await user.click(button);
+    await user.tab();
+    await user.tab();
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Time range" })).toBeNull());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("opens on the most recent project with focus on the heading", async () => {
     installFakeMonitoringApi({ projects: [linkedProject("p1", "Alpha", "s1"), linkedProject("p2", "Zoo", "s2")] }, async () => json([]));
     recordRecent({ kind: "project", id: "p1" }, 1);
@@ -77,6 +103,47 @@ describe("Explore", () => {
     expect(query().getAttribute("aria-keyshortcuts")).toBe("q");
     expect(query().getAttribute("spellcheck")).toBe("false");
     expect(meta().textContent).toBe("Pick a metric on the left, or type a query.");
+  });
+
+  it("an empty run has no green check", async () => {
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 });
+    await openExplore();
+    await waitFor(() => expect(meta().textContent).toContain("0 series · 5 ms"));
+    expect(meta().textContent).not.toContain("✓");
+    expect(meta().querySelector("span")?.className ?? "").not.toMatch(/metaOk/);
+  });
+
+  it("an unknown metric is named", async () => {
+    const catalogs = (state: "ok" | "partial") => ({ p1: catalogOf("p1", source("s1", { state, metrics: [metric("http_requests_total", { type: "counter", labels: ["job"], series: 3 })] })) });
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, { catalogs: catalogs("ok") });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(nope_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toMatch(/0 series.*No metric named nope_total in .+ for this project\./));
+    cleanup();
+    // A name the catalog lists is never called missing.
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, { catalogs: catalogs("ok") });
+    await openExplore({ page: "explore", project: "p1", expr: "http_requests_total" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    expect(meta().textContent).not.toContain("No metric named");
+  });
+
+  it("an answer with series never says the metric is missing", async () => {
+    shop({}, three, {
+      catalogs: { p1: catalogOf("p1", source("s1", { state: "ok", metrics: [metric("http_requests_total", { series: 3 })] })) },
+    });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(newer_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toContain("✓ 3 series"));
+    await pause(50);
+    expect(meta().textContent).not.toContain("No metric named");
+  });
+
+  it("a partial catalog names no missing metric", async () => {
+    shop({}, { result_type: "matrix", series: [], took_ms: 5 }, {
+      catalogs: { p1: catalogOf("p1", source("s1", { state: "partial", metrics: [metric("http_requests_total", { series: 3 })] })) },
+    });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(nope_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    await pause(50);
+    expect(meta().textContent).not.toContain("No metric named");
   });
 
   it("meta line reads like the prototype", async () => {
@@ -102,6 +169,47 @@ describe("Explore", () => {
     expect(chart.closest("[data-dim]")?.getAttribute("data-dim")).toBe("true");
     expect(within(label.closest("[data-last-good]") as HTMLElement).getByText("up")).toBeTruthy();
     expect(batches(api)).toHaveLength(1);
+  });
+
+  it("several queries say Explore runs one at a time", async () => {
+    const ONE = "Explore runs one query at a time. Keep one query in the field, or run them one after another.";
+    const api = shop();
+    await openExplore({ page: "explore", project: "p1", expr: "up\nrate(x[5m])" });
+    await waitFor(() => expect(meta().textContent).toBe(`✗ ${ONE}`));
+    expect(batches(api)).toHaveLength(0);
+    // A text to fix, not a failure: no failure panel and no Try again.
+    expect(screen.queryByRole("heading", { name: /^(Query error|Source unreachable)$/ })).toBeNull();
+    expect(document.querySelector("[aria-labelledby='explore-failure-title']")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add to dashboard" }).getAttribute("aria-disabled")).toBe("true");
+    // After a good run the same refusal keeps the last good result, captioned with its own text.
+    fireEvent.change(query(), { target: { value: "up" } });
+    await screen.findByText("chart 3");
+    fireEvent.change(query(), { target: { value: "up\nsum(up)" } });
+    await waitFor(() => expect(meta().textContent).toBe(`✗ ${ONE} · showing the last result`));
+    const label = screen.getByText("Last good result");
+    expect((label.closest("[data-last-good]") as HTMLElement).querySelector("code")?.textContent).toBe("up");
+    expect(batches(api)).toHaveLength(1);
+    // One query over two lines is still one query.
+    fireEvent.change(query(), { target: { value: "up\nor vector(0)" } });
+    await waitFor(() => expect(batches(api)).toHaveLength(2));
+    expect(batches(api)[1].queries[0].query).toBe("up\nor vector(0)");
+  });
+
+  it("an empty metric answer says why once the reason arrives", async () => {
+    const MISSING = "This Prometheus doesn't collect node metrics (node-exporter) for this project: node_load1 has no series.";
+    const api = shop({ node_load1: { result_type: "matrix", series: [] } }, three, { whyEmpty: { reason: "missing_metric", message: MISSING } });
+    await openExplore({ page: "explore", project: "p1", expr: "node_load1" });
+    const reason = await screen.findByText(MISSING);
+    expect(reason.hasAttribute("data-empty-reason")).toBe(true);
+    expect(screen.queryByText("No data in this time range.")).toBeNull();
+    const why = api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty");
+    expect(why).toHaveLength(1);
+    expect(why[0].body).toMatchObject({ source_id: "s1", project_id: "p1", query: "node_load1", metrics: ["node_load1"] });
+    // A new text with data: the reason goes with the empty answer it was about.
+    fireEvent.change(query(), { target: { value: "up" } });
+    expect(await screen.findByText("chart 3")).toBeTruthy();
+    expect(screen.queryByText(MISSING)).toBeNull();
+    expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(1);
   });
 
   it("a failed run shows Source unreachable with Try again", async () => {
@@ -301,7 +409,300 @@ describe("Explore", () => {
     expect(readTrail("p1")).toEqual([]);
     fireEvent.change(query(), { target: { value: "sum(up)" } });
     fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
-    expect(readTrail("p1").map((e) => e.expr)).toEqual(["sum(up)"]);
+    // Kept on the run's answer (Task 25, P24), not at the press.
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["sum(up)"]));
+  });
+
+  it("a source of another kind holds the old query", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 1");
+    // The note's live region is there before anything is held, empty.
+    const region = document.querySelector<HTMLElement>("[data-explore-held] [role='status']");
+    expect(region).toBeTruthy();
+    expect(region!.textContent).toBe("");
+    const sourceSelect = screen.getByRole("combobox", { name: "Source" });
+    const before = batches(api).length;
+    fireEvent.change(sourceSelect, { target: { value: "l1" } });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    expect(screen.getByText(HELD)).toBe(region);
+    await pause(450);
+    // Nothing is sent to Loki, nothing is drawn and no selector is named.
+    expect(batches(api)).toHaveLength(before);
+    // Ctrl+Enter while held sends nothing and keeps nothing.
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(readTrail("p1").filter((e) => e.sourceId === "l1")).toEqual([]);
+    expect(screen.queryByText(/^chart /)).toBeNull();
+    expect(screen.queryByText(/Logs from/)).toBeNull();
+    expect(meta().textContent).not.toContain("✗");
+    expect(screen.getByRole("button", { name: "Add to dashboard" }).getAttribute("aria-disabled")).toBe("true");
+    // Back to a source of the first kind: the hold ends and the text runs there.
+    fireEvent.change(sourceSelect, { target: { value: "s1" } });
+    expect(screen.queryByText(HELD)).toBeNull();
+    await screen.findByText("chart 1");
+    expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: "up", source_id: "s1" });
+    // Held again; Clear the query empties the field and keeps the keyboard there.
+    fireEvent.change(sourceSelect, { target: { value: "l1" } });
+    const clear = await screen.findByRole("button", { name: "Clear the query" });
+    await user.click(clear);
+    expect(query().value).toBe("");
+    expect(document.activeElement).toBe(query());
+    expect(screen.queryByText(HELD)).toBeNull();
+    expect(readTrail("p1").filter((e) => e.sourceId === "l1")).toEqual([]);
+    // A LogQL text ends the hold and runs.
+    fireEvent.change(query(), { target: { value: '{app="api"}' } });
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: '{app="api"}', source_id: "l1" }));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("a view that opens with a query in the other language is held", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: "rate(http_requests_total[5m])" });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(0);
+    expect(document.activeElement).not.toBe(document.body);
+    // The way on works from the keyboard: pick the source of its language, and it runs there.
+    await user.keyboard("q");
+    expect(document.activeElement).toBe(query());
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s1" } });
+    await screen.findByText("chart 1");
+    expect(batches(api).at(-1)?.queries[0]).toMatchObject({ query: "rate(http_requests_total[5m])", source_id: "s1" });
+    expect(screen.queryByText(HELD)).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    cleanup();
+    // A selector both languages read opens as it is.
+    const again = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(again).length).toBeGreaterThan(0));
+    expect(screen.queryByText(/^This query is/)).toBeNull();
+  });
+
+  it("a project switch keeps a Loki source", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [
+        { ...seedProject("p1", "Alpha"), links: [linkTo("s1"), linkTo("l1", "loki")] },
+        { ...seedProject("p2", "Beta"), links: [linkTo("s2"), linkTo("l2", "loki")] },
+        { ...seedProject("p3", "Gamma"), links: [linkTo("s3"), linkTo("l1", "loki")] },
+      ],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    const project = screen.getByRole("combobox", { name: "Project" });
+    const sourceValue = () => (screen.queryByRole("combobox", { name: "Source" }) as HTMLSelectElement | null)?.value;
+    await waitFor(() => expect(sourceValue()).toBe("l1"));
+    // The same Loki is linked to Gamma: it stays.
+    fireEvent.change(project, { target: { value: "p3" } });
+    await waitFor(() => expect(sourceValue()).toBe("l1"));
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ project_id: "p3", source_id: "l1", query: '{app="x"}' }));
+    // Beta has another Loki: the first Loki it links.
+    fireEvent.change(project, { target: { value: "p2" } });
+    await waitFor(() => expect(sourceValue()).toBe("l2"));
+    await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ project_id: "p2", source_id: "l2", query: '{app="x"}' }));
+    expect(batches(api).some((b) => b.queries[0].project_id === "p2" && (b.queries[0] as { source_id?: string }).source_id === "s2")).toBe(false);
+    expect(screen.queryByText(/This query is/)).toBeNull();
+  });
+
+  it("a project with no source of the kept kind holds a LogQL query", async () => {
+    const HELD = "This query is LogQL, and s2 name reads PromQL, so it wasn't run. Write a PromQL query, or pick a Loki source.";
+    const api = installFakeMonitoringApi({
+      projects: [
+        { ...seedProject("p1", "Alpha"), links: [linkTo("s1"), linkTo("l1", "loki")] },
+        { ...seedProject("p2", "Beta"), links: [linkTo("s2")] },
+      ],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).some((b) => (b.queries[0] as { source_id?: string }).source_id === "l1")).toBe(true));
+    const before = batches(api).length;
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p2" } });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(screen.queryByText(/^chart /)).toBeNull();
+  });
+
+  it("a LogQL query held under a Prometheus source lists no lines either", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).length).toBeGreaterThan(0));
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s1" } });
+    expect(await screen.findByText(/^This query is LogQL, and s1 name reads PromQL/)).toBeTruthy();
+    const before = batches(api).length;
+    // Even a Logs query typed while the main one is held waits with it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Logs query" }), { target: { value: '{app="y"}' } });
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(screen.queryByText(/Logs from/)).toBeNull();
+  });
+
+  it("a trail chip whose source is no longer linked is held, not run", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    pushTrail("p1", { expr: "rate(http_requests_total[5m])", sourceId: "gone", at: 1, sourceName: "Old Prometheus", sourceType: "prometheus" });
+    pushTrail("p1", { expr: "up", sourceId: "older", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).length).toBeGreaterThan(0));
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    // The chip names where it came from, and that the project no longer links it.
+    const named = within(trail).getByRole("button", { name: "rate(http_requests_total[5m]) · Old Prometheus (not linked)" });
+    expect(named.getAttribute("title")).toBe("rate(http_requests_total[5m]) · Old Prometheus (not linked)");
+    const unnamed = within(trail).getByRole("button", { name: "up · source not linked" });
+    expect(unnamed.textContent).toBe("up · source not linked");
+    const before = batches(api).length;
+    await user.click(named);
+    expect(query().value).toBe("rate(http_requests_total[5m])");
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect((screen.getByRole("combobox", { name: "Source" }) as HTMLSelectElement).value).toBe("l1");
+    // Its language is read from the text when the trail kept no source kind.
+    await user.click(within(trail).getByRole("button", { name: "up · source not linked" }));
+    expect(query().value).toBe("up");
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    // Neither is kept again: it ran nowhere.
+    expect(readTrail("p1").map((e) => e.sourceId)).toEqual(["gone", "older"]);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the switched note goes with the next query", async () => {
+    twoProjects({ "p1|up": three, "p1|rate(x[5m])": one });
+    pushTrail("p1", { expr: "rate(x[5m])", sourceId: "s3", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 3");
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    await user.click(within(trail).getByRole("button", { name: "rate(x[5m]) · s3 name" }));
+    const said = within(trail.parentElement as HTMLElement).getByRole("status");
+    await waitFor(() => expect(said.textContent).toBe("Switched to s3 name."));
+    fireEvent.change(query(), { target: { value: "rate(x[10m])" } });
+    expect(said.textContent).toBe("");
+  });
+
+  it("the added note goes with a project switch", async () => {
+    twoProjects({ "p1|up": one, "p2|up": one });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", expr: "up" });
+    await screen.findByText("chart 1");
+    await user.click(screen.getByRole("button", { name: "Add to dashboard" }));
+    const box = await screen.findByRole("dialog", { name: "Add to dashboard" });
+    await user.click(within(box).getByRole("button", { name: "Add panel" }));
+    const note = await screen.findByText(/^Added to "/);
+    // Its own row under the header: never among the controls.
+    expect(note.closest("[data-explore-added]")).toBeTruthy();
+    expect(note.closest("header")).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p2" } });
+    await waitFor(() => expect(screen.queryByText(/^Added to "/)).toBeNull());
+    expect(screen.queryByRole("button", { name: "Open dashboard" })).toBeNull();
+  });
+
+  it("half-typed and failed queries are not kept", async () => {
+    const empty: FakeQueryAnswer = { result_type: "matrix", series: [], took_ms: 5 };
+    shop({ node_c: empty, bad: { error: { code: "unreachable", message: "Prometheus didn't answer in time." }, status: 502 } });
+    await openExplore({ page: "explore", project: "p1", expr: "node_c" });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    // An empty answer, left alone past the pause, isn't kept.
+    await pause(2300);
+    expect(readTrail("p1")).toEqual([]);
+    // A failed run isn't kept, even run on purpose.
+    fireEvent.change(query(), { target: { value: "bad" } });
+    await screen.findByRole("heading", { name: "Source unreachable" });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await pause(2300);
+    expect(readTrail("p1")).toEqual([]);
+    // Text that can't run isn't kept either.
+    fireEvent.change(query(), { target: { value: "sum(up" } });
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(meta().textContent).toContain("✗"));
+    expect(readTrail("p1")).toEqual([]);
+    // A run with data, left alone, is.
+    fireEvent.change(query(), { target: { value: "up" } });
+    await screen.findByText("chart 3");
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["up"]), { timeout: 3000 });
+  }, 15000);
+
+  it("an explicit run is kept even when empty", async () => {
+    shop({ node_c: { result_type: "matrix", series: [], took_ms: 5 } });
+    await openExplore({ page: "explore", project: "p1" });
+    await screen.findByRole("textbox", { name: "Query" });
+    fireEvent.change(query(), { target: { value: "node_c" } });
+    await waitFor(() => expect(meta().textContent).toContain("0 series"));
+    const hold = holdBatches();
+    hold.on = true;
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    // Not at the press: on the run's answer.
+    await waitFor(() => expect(document.querySelector("[data-explore-running]")).toBeTruthy());
+    expect(readTrail("p1")).toEqual([]);
+    hold.release();
+    await waitFor(() => expect(readTrail("p1").map((e) => e.expr)).toEqual(["node_c"]));
+  });
+
+  it("a trail chip from another source says it switched", async () => {
+    twoProjects({ "p1|up": three, "p1|rate(x[5m])": one });
+    pushTrail("p1", { expr: "up", sourceId: "s1", at: 1 });
+    pushTrail("p1", { expr: "rate(x[5m])", sourceId: "s3", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 3");
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    const mine = within(trail).getByRole("button", { name: "up" });
+    expect(mine.getAttribute("title")).toBe("up · s1 name");
+    expect(mine.textContent).toBe("up");
+    const other = within(trail).getByRole("button", { name: "rate(x[5m]) · s3 name" });
+    expect(other.getAttribute("title")).toBe("rate(x[5m]) · s3 name");
+    expect(other.textContent).toBe("rate(x[5m]) · s3 name");
+    await user.click(other);
+    await waitFor(() => expect((screen.getByRole("combobox", { name: "Source" }) as HTMLSelectElement).value).toBe("s3"));
+    const said = within(trail.parentElement as HTMLElement).getByRole("status");
+    expect(said.textContent).toBe("Switched to s3 name.");
+    await screen.findByText("chart 1");
+    expect(query().value).toBe("rate(x[5m])");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the query field grows with wrapped text", async () => {
+    let height = 55;
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => height });
+    try {
+      shop();
+      await openExplore();
+      await screen.findByRole("textbox", { name: "Query" });
+      fireEvent.change(query(), { target: { value: `sum(rate(${"a".repeat(120)}[5m]))` } });
+      expect(query().style.height).toBe("55px");
+      expect(query().style.overflowY).toBe("hidden");
+      // Past ten lines it stops growing and scrolls.
+      height = 2000;
+      fireEvent.change(query(), { target: { value: `sum(rate(${"b".repeat(2000)}[5m]))` } });
+      expect(parseFloat(query().style.height)).toBeLessThan(2000);
+      expect(parseFloat(query().style.height)).toBeGreaterThan(150);
+      expect(query().style.overflowY).toBe("auto");
+    } finally {
+      delete (HTMLTextAreaElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
   });
 
   it("typing just before switching tabs still lands in the Explore tab", async () => {

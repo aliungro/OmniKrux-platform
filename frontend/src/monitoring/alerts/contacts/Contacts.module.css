@@ -94,6 +94,15 @@
   color: var(--bad);
 }
 
+/* What is wrong with a stored address (it still sends): amber words, nothing louder. */
+.stored {
+  grid-column: 1;
+  margin: 0;
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .buttons {
   display: flex;
   flex-wrap: wrap;

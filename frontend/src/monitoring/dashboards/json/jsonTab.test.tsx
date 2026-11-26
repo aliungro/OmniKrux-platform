@@ -8,6 +8,7 @@ import { parseDashboardJson, type DashboardSpec } from "../schema";
 import { writeDraft } from "../drafts/draftStore";
 import type { EditingState } from "../editor/editorState";
 import { editSessions, JSON_SAVE_REFUSED } from "../editor/useDashboardEditor";
+import { jsonWords } from "./JsonTab";
 
 // The chart chunk as a stub.
 vi.mock("../../charts", async () => {
@@ -92,8 +93,8 @@ const session = () => [...editSessions.values()].find((x): x is EditingState => 
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const statusLine = () => screen.getByTestId("json-state");
 const notBody = () => expect(document.activeElement).not.toBe(document.body);
-/** The JSON tab's own Discard (the header has one too in edit mode). */
-const jsonDiscard = () => within(screen.getByRole("tabpanel")).getByRole("button", { name: "Discard" });
+/** Edit mode has one Discard: the header's. */
+const jsonDiscard = () => screen.getByRole("button", { name: "Discard" });
 
 /** The dashboard open, with the keyboard on its title. */
 async function opened(api = shop()) {
@@ -157,7 +158,7 @@ describe("The JSON tab", () => {
     ]);
     // Text that isn't JSON at all: no path.
     type(area, "{ nope");
-    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗ Not valid JSON: .+ · the dashboard keeps the last valid version$/));
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗ Not valid JSON at line 1, column 3: .+. · the dashboard keeps the last valid version$/));
     expect(screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled")).toBe("true");
   });
 
@@ -167,7 +168,7 @@ describe("The JSON tab", () => {
     const area = await editorField();
     expect(statusLine().textContent).toBe("✓ Valid");
     expect(screen.queryByText("Editing")).toBeNull();
-    expect(jsonDiscard().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
     area.focus();
     type(area, changed((d) => { d.title = "API latency (p95)"; }));
     expect(await screen.findByText("Editing")).toBeTruthy();
@@ -442,10 +443,11 @@ describe("The JSON tab", () => {
     type(area, changed((d) => { d.panels[0].layout.w = 1; }));
     await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
     await user.click(screen.getByRole("button", { name: "Save dashboard" }));
-    const notice = (await screen.findByText(JSON_SAVE_REFUSED)).closest('[role="alert"]') as HTMLElement;
+    // On the JSON tab the inline problem says it (and takes the keyboard); no second banner.
     expect(JSON_SAVE_REFUSED).toBe("The JSON has a problem. Fix it or discard it before saving.");
-    expect(notice.textContent).toContain("panels[0].layout.w");
-    expect(within(notice).getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(statusLine()));
+    expect(statusLine().textContent).toContain("panels[0].layout.w");
+    expect(screen.queryByText(JSON_SAVE_REFUSED)).toBeNull();
     // Ctrl+S from the editor, right after typing: refused too.
     area.focus();
     type(area, changed((d) => { d.panels[0].layout.w = 1; d.title = "Typed"; }));
@@ -500,8 +502,8 @@ describe("The JSON tab", () => {
     await waitFor(() => expect(over.getAttribute("aria-disabled")).toBeNull());
     await user.click(over);
     // Nothing is sent, the text stays, and the edit bar says why.
-    const notice = (await screen.findByText(JSON_SAVE_REFUSED)).closest('[role="alert"]') as HTMLElement;
-    expect(within(notice).getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(statusLine()));
+    expect(screen.queryByText(JSON_SAVE_REFUSED)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     await pause(50);
     expect(puts(api)).toHaveLength(1);
@@ -511,5 +513,140 @@ describe("The JSON tab", () => {
     // Not rebased: the newer version is still reviewed before anything is saved over it.
     expect(session()?.baseVersion).toBe(1);
     notBody();
+  });
+
+  it("undo and the title refused while the JSON doesn't apply say so on screen, and never come back stale", async () => {
+    const { user, area } = await editingJson();
+    const first = changed((d) => { d.panels[0].title = "One"; });
+    type(area, first);
+    await waitFor(() => expect(session()?.draft.panels[0].title).toBe("One"));
+    const bad = changed((d) => { d.panels[0].layout.w = 1; });
+    type(area, bad);
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    const refusedNotice = () => document.querySelector("[data-undo-refused]");
+    // Undo is refused: the text is kept, and the refusal is shown, not only spoken.
+    expect(refusedNotice()).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(refusedNotice()?.textContent).toBe("Fix the JSON first, or discard it.");
+    expect(session()?.jsonText).toBe(bad);
+    expect(session()?.draft.panels[0].title).toBe("One");
+    // The title field refuses too, and says why under it.
+    const field = screen.getByRole("textbox", { name: "Dashboard title" });
+    await user.type(field, "X");
+    expect((field as HTMLInputElement).value).toBe("API latency");
+    expect(document.getElementById(field.getAttribute("aria-describedby") ?? "")?.textContent).toBe("Fix the JSON first, or discard it.");
+    // The JSON applies again: both refusals are over.
+    type(area, first);
+    await waitFor(() => expect(session()?.jsonText).toBeNull());
+    expect(refusedNotice()).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+    // Broken again: nothing was refused this time, so neither comes back.
+    type(area, bad);
+    await waitFor(() => expect(session()?.jsonText).toBe(bad));
+    expect(refusedNotice()).toBeNull();
+    expect(field.getAttribute("aria-invalid")).toBeNull();
+    expect(field.getAttribute("aria-describedby")).toBeNull();
+    notBody();
+  });
+});
+
+describe("The JSON tab's words and buttons", () => {
+  it("the JSON tab says the problem in words", async () => {
+    const { area } = await editingJson();
+    type(area, '{ "title": "x", }');
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗ /));
+    expect(statusLine().textContent).toBe(
+      "✗ Not valid JSON at line 1, column 17: a property name needs double quotes. · the dashboard keeps the last valid version",
+    );
+    type(area, '{\n  "title": "x"');
+    await waitFor(() => expect(statusLine().textContent).toMatch(/the text ends too early/));
+    expect(statusLine().textContent).toMatch(/^✗ Not valid JSON at line 2, column 15: the text ends too early\. /);
+    type(area, "{ nope");
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗ Not valid JSON at line 1, column 3: /));
+    expect(statusLine().textContent).not.toMatch(/in JSON at position/);
+  });
+
+  it("jsonWords reads either position style and falls back to plain words", () => {
+    expect(jsonWords("Not valid JSON: Expected double-quoted property name in JSON at position 16 (line 1 column 17)"))
+      .toBe("Not valid JSON at line 1, column 17: a property name needs double quotes.");
+    // Firefox's wording, any case.
+    expect(jsonWords("Not valid JSON: JSON.parse: unexpected end of data at line 3 column 9 of the JSON data"))
+      .toBe("Not valid JSON at line 3, column 9: the text ends too early.");
+    expect(jsonWords("Not valid JSON: JSON.parse: expected double-quoted property name at line 1 column 3 of the JSON data"))
+      .toBe("Not valid JSON at line 1, column 3: a property name needs double quotes.");
+    expect(jsonWords("Not valid JSON: JSON.parse: unexpected character at line 2 column 1 of the JSON data"))
+      .toBe("Not valid JSON at line 2, column 1: a character doesn't belong there.");
+    expect(jsonWords("Not valid JSON: JSON.parse: something odd at line 2 column 1 of the JSON data"))
+      .toBe("Not valid JSON at line 2, column 1: it doesn't read as JSON.");
+    expect(jsonWords("Not valid JSON: Unexpected end of JSON input")).toBe("Not valid JSON: the text ends too early.");
+    expect(jsonWords("Not valid JSON: Unexpected token } in JSON at position 4", "{\n  }"))
+      .toBe("Not valid JSON at line 2, column 3: a character doesn't belong there.");
+    expect(jsonWords("Not valid JSON: Unexpected token } in JSON at position 4")).toBe("Not valid JSON: a character doesn't belong there.");
+    expect(jsonWords("Not valid JSON: something else")).toBe("Not valid JSON: it doesn't read as JSON.");
+  });
+
+  it("Ctrl+S on the JSON tab shows the problem once", async () => {
+    const { user, area, api } = await editingJson();
+    type(area, "{ nope");
+    await waitFor(() => expect(statusLine().textContent).toMatch(/^✗/));
+    area.focus();
+    await user.keyboard("{Control>}s{/Control}");
+    await pause(50);
+    expect(puts(api)).toHaveLength(0);
+    // The inline problem has the keyboard, and no second banner says the same.
+    await waitFor(() => expect(document.activeElement).toBe(statusLine()));
+    expect(screen.queryByText(JSON_SAVE_REFUSED)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show in JSON" })).toBeNull();
+    expect(screen.getAllByText(/Not valid JSON/)).toHaveLength(1);
+    // Again from the editor, and from the Save button.
+    area.focus();
+    await user.keyboard("{Control>}s{/Control}");
+    await waitFor(() => expect(document.activeElement).toBe(statusLine()));
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    await waitFor(() => expect(document.activeElement).toBe(statusLine()));
+    expect(screen.queryByText(JSON_SAVE_REFUSED)).toBeNull();
+    notBody();
+    // On the Dashboard tab the notice (with Show in JSON) is still how it is said.
+    await user.click(screen.getByRole("tab", { name: "Dashboard" }));
+    await user.click(screen.getByRole("button", { name: "Save dashboard" }));
+    expect(await screen.findByText(JSON_SAVE_REFUSED)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show in JSON" })).toBeTruthy();
+  });
+
+  it("typing on the view-mode JSON tab while a draft is offered asks for a choice", async () => {
+    const draft = doc();
+    draft.panels[0].title = "Requests per second";
+    writeDraft({ v: 1, dashboardId: "d1", baseVersion: 1, savedAt: 1, draft, jsonText: null, writer: "w-other" });
+    const { user } = await opened();
+    await user.keyboard("2");
+    const area = await editorField();
+    type(area, changed((d) => { d.title = "Typed over a draft"; }));
+    const banner = screen.getByRole("region", { name: "Unsaved draft" });
+    await waitFor(() => expect(within(banner).getByText("Restore the draft or discard it before editing.")).toBeTruthy());
+    expect(document.activeElement).toBe(within(banner).getByRole("button", { name: "Restore draft" }));
+    expect(screen.queryByText("Editing")).toBeNull();
+    expect(session()).toBeNull();
+    // The typed text is not kept as an edit, and the stored draft is still the other one.
+    await pause(250);
+    expect(JSON.parse(localStorage.getItem("omnikrux.monitoring.draft.d1") ?? "null")?.writer).toBe("w-other");
+    notBody();
+  });
+
+  it("view mode's JSON tab has no Discard", async () => {
+    const { user } = await opened();
+    await user.keyboard("2");
+    await editorField();
+    const panel = screen.getByRole("tabpanel");
+    expect(within(panel).queryByRole("button", { name: "Discard" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Review changes" })).toBeNull();
+    expect(statusLine().textContent).toBe("✓ Valid");
+    notBody();
+  });
+
+  it("edit mode's JSON tab has one Discard, the toolbar's", async () => {
+    await editingJson();
+    expect(screen.getAllByRole("button", { name: "Discard" })).toHaveLength(1);
+    expect(within(screen.getByRole("tabpanel")).queryByRole("button", { name: "Discard" })).toBeNull();
+    expect(within(screen.getByRole("tabpanel")).getByRole("button", { name: "Review changes" })).toBeTruthy();
   });
 });

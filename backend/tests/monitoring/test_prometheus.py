@@ -84,6 +84,23 @@ async def test_prometheus_range_query_becomes_series(fake_prometheus, direct):
     assert request.params["step"] == ["15"]
 
 
+async def test_a_step_longer_than_five_minutes_looks_back_over_the_whole_step(
+    fake_prometheus, direct
+):
+    # Each point of a gauge reads the newest sample at most `lookback_delta` before it. Over a
+    # year, a step is a day: with Prometheus's own 5 minutes, a point sees 5 minutes of its day.
+    t0 = 1_700_006_400.0
+    connector, t = PrometheusConnector(), direct(fake_prometheus.url, name=NAME)
+    await connector.query(
+        t, ConnectorQuery("range", "up", start=t0, end=t0 + 86400, step=86400), NAME
+    )
+    assert fake_prometheus.requests[-1].params["lookback_delta"] == ["86400"]
+    await connector.query(t, ConnectorQuery("range", "up", start=t0, end=t0 + 3600, step=300), NAME)
+    assert "lookback_delta" not in fake_prometheus.requests[-1].params
+    await connector.query(t, ConnectorQuery("instant", "up", time=t0), NAME)
+    assert "lookback_delta" not in fake_prometheus.requests[-1].params
+
+
 async def test_prometheus_instant_vector_and_scalar(fake_prometheus, direct):
     fake_prometheus.results["up"] = {
         "resultType": "vector",

@@ -156,6 +156,14 @@
   font-size: 12.5px;
 }
 
+/* Why there are no lines: a sentence to read, a step darker than the plain note. */
+.reason {
+  max-inline-size: 72ch;
+  color: var(--ink-2);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .failure {
   display: flex;
   flex-wrap: wrap;
@@ -165,6 +173,29 @@
   border-left: 2px solid var(--bad);
   border-radius: 2px;
   background: color-mix(in srgb, var(--bad) 6%, transparent);
+}
+
+/* A text that can't run: the same red rule as a failure, but no wash and no button. The way on
+   is the query field, so the strip only says what's wrong and what to do. */
+.invalid {
+  margin: 10px 0 0;
+  padding: 6px 12px;
+  max-inline-size: 80ch;
+  border-left: 2px solid var(--bad);
+  border-radius: 2px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.invalidMark {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.invalidStep {
+  color: var(--ink-3);
 }
 
 .failureReason {
@@ -179,4 +210,32 @@
   .section {
     padding: 10px 10px 12px;
   }
+}
+
+/* Wrap lines: a toggle at the header's end; pressed reads as the quiet focus tint. */
+.wrap {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wrap:hover {
+  border-color: var(--focus);
+}
+
+.wrap[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+  background: color-mix(in srgb, var(--focus) 10%, transparent);
+}
+
+.wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }

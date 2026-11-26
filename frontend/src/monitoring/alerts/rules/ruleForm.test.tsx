@@ -7,6 +7,7 @@ import { intercept } from "../../test/dashboardSeeds";
 import { emptyInstallState, installFakeMonitoringApi, type FakeMonitoringState } from "../../test/fakeMonitoringApi";
 import { renderMonitoringApp, seedProject, tabsWith } from "../../test/renderMonitoringApp";
 import type { CapabilityOut, ContactPointOut, RuleIn, RuleOut, TargetOut } from "../api";
+import { mayMixClusters, mixedClusterWarnings } from "./clusterWarning";
 import { endRuleForm, ruleFormSessions } from "./formSessions";
 
 afterEach(() => {
@@ -60,12 +61,12 @@ async function newRule(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("the rule form", () => {
-  it("New alert rule opens the form with focus on Name, for the shown rule's project", async () => {
+  it("New alert rule opens the form with focus on For, for the first project by name", async () => {
     const user = userEvent.setup();
     open();
     await newRule(user);
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("Name")));
     const forSelect = screen.getByLabelText("For") as HTMLSelectElement;
+    await waitFor(() => expect(document.activeElement).toBe(forSelect));
     await waitFor(() => expect(forSelect.selectedOptions[0]?.textContent).toBe("dev"));
     expect([...forSelect.options].map((o) => o.textContent)).toEqual(["dev", "prod-east", "prod-west", "Group · Production"]);
     const source = screen.getByLabelText("Source") as HTMLSelectElement;
@@ -78,6 +79,52 @@ describe("the rule form", () => {
     expect(screen.getByRole("group", { name: "Alert when any route is above 0 for 5 min, checked every 1 min" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save rule" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+  });
+
+  it("the rule form starts on the current owner and its first field", async () => {
+    // The owner new dashboards go to: the project opened most recently.
+    localStorage.setItem("omnikrux.monitoring.recent", JSON.stringify([{ kind: "project", id: "p4", at: Date.now() }]));
+    const user = userEvent.setup();
+    open();
+    await newRule(user);
+    const forSelect = screen.getByLabelText("For") as HTMLSelectElement;
+    await waitFor(() => expect(forSelect.selectedOptions[0]?.textContent).toBe("prod-west"));
+    await waitFor(() => expect(document.activeElement).toBe(forSelect));
+    expect(document.activeElement).not.toBe(document.body);
+    // The source names its full choice where the select cuts it short.
+    const source = screen.getByLabelText("Source") as HTMLSelectElement;
+    expect(source.getAttribute("title")).toBe("Central Prometheus (Prometheus-compatible)");
+    localStorage.clear();
+    cleanup();
+    for (const id of [...ruleFormSessions.keys()]) endRuleForm(id);
+
+    // Nothing opened yet: the first project by name.
+    installFakeMonitoringApi({ projects: [west, east, dev], groups: [production], rules: [latency, crossing] });
+    renderMonitoringApp({ tabs: tabsWith({ page: "alerts", rule: "rB" }) });
+    await newRule(user);
+    const again = screen.getByLabelText("For") as HTMLSelectElement;
+    await waitFor(() => expect(again.selectedOptions[0]?.textContent).toBe("dev"));
+    await waitFor(() => expect(document.activeElement).toBe(again));
+  });
+
+  it("the tool line names the source", async () => {
+    const user = userEvent.setup();
+    const ops: ContactPointOut = {
+      id: "c1", name: "Slack #ops", type: "slack", settings: {}, secrets_set: ["url"], summary: "Slack, #ops", used_by: [], last_delivery: null,
+      created_at: T, updated_at: T,
+    };
+    const cap: CapabilityOut = { project_id: "p1", project_name: "dev", source_id: "s1", source_name: "Prometheus", tool: "prometheus_rule", reason: null };
+    open({ contactPoints: [ops], capabilities: [cap] });
+    await newRule(user);
+    expect(await screen.findByText("In Prometheus: fires even when OmniKrux is off.")).toBeTruthy();
+    expect(screen.queryByText(/\(dev\)/)).toBeNull();
+    // Notify names each box by its contact point, and Notify and Channel share one slot.
+    const box = within(screen.getByRole("group", { name: "Notify" })).getByRole("checkbox");
+    expect(box.getAttribute("aria-label")).toBe("Slack #ops");
+    const slot = box.closest("[data-notify-slot]");
+    expect(slot).toBeTruthy();
+    await user.click(screen.getByRole("radio", { name: "In the tool" }));
+    expect((await screen.findByLabelText("Channel")).closest("[data-notify-slot]")).toBe(slot);
   });
 
   it("saving a new rule selects it and queues its review", async () => {
@@ -115,7 +162,8 @@ describe("the rule form", () => {
     await user.click(screen.getByRole("button", { name: "Edit rule" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: 'Edit "LatencyHigh"' })).toBeTruthy());
     const name = screen.getByLabelText("Name") as HTMLInputElement;
-    expect(document.activeElement).toBe(name);
+    // Edit starts on the first field too.
+    expect(document.activeElement).toBe(screen.getByLabelText("For"));
     expect(name.value).toBe("LatencyHigh");
     // Saved somewhere else meanwhile.
     api.state.rules[0] = { ...api.state.rules[0], name: "Latency too high", version: 2 };
@@ -127,7 +175,7 @@ describe("the rule form", () => {
     await waitFor(() => expect(document.activeElement).toBe(again));
     await user.click(again);
     await waitFor(() => expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Latency too high"));
-    expect(document.activeElement).toBe(screen.getByLabelText("Name"));
+    expect(document.activeElement).toBe(screen.getByLabelText("For"));
     expect(screen.queryByText(/changed somewhere else/)).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: 'Edit "Latency too high"' })).toBeTruthy();
   });
@@ -179,7 +227,7 @@ describe("the rule form", () => {
     const notify = await screen.findByRole("group", { name: "Notify" });
     expect(within(notify).getByRole("checkbox", { name: /Slack #ops/ })).toBeTruthy();
     expect(screen.queryByLabelText("Channel")).toBeNull();
-    await waitFor(() => expect(screen.getByText("In Prometheus (dev), fires even when OmniKrux is off")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("In Prometheus: fires even when OmniKrux is off.")).toBeTruthy());
     await user.click(screen.getByRole("radio", { name: "In the tool" }));
     expect(screen.queryByRole("group", { name: "Notify" })).toBeNull();
     const channel = await screen.findByLabelText("Channel") as HTMLSelectElement;
@@ -212,7 +260,7 @@ describe("the rule form", () => {
     await waitFor(() => expect(details().textContent).toBe("Paging"));
     await user.click(screen.getByRole("button", { name: "Edit rule" }));
     const name = await screen.findByLabelText("Name");
-    if (answered) await screen.findByText("In Prometheus (dev), fires even when OmniKrux is off");
+    if (answered) await screen.findByText("In Prometheus: fires even when OmniKrux is off.");
     await user.type(name, " now");
     await user.click(screen.getByRole("button", { name: "Save rule" }));
     await waitFor(() => expect(api.requests.some((r) => r.method === "PUT" && r.url.endsWith("/alerts/rules/rT"))).toBe(true));
@@ -264,7 +312,7 @@ describe("the rule form", () => {
       install: { ...emptyInstallState(), contacts: { k1: { kind: "review", plan: contactsPlan } } },
     });
     await newRule(user);
-    await waitFor(() => expect(screen.getByText("In Prometheus (dev), fires even when OmniKrux is off")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("In Prometheus: fires even when OmniKrux is off.")).toBeTruthy());
     await user.click(screen.getByRole("radio", { name: "In the tool" }));
     const notify = screen.getByRole("group", { name: "Notify" });
     expect(within(notify).getByText(
@@ -300,7 +348,7 @@ describe("the rule form", () => {
     const { api } = open({ contactPoints: [ops], capabilities: caps });
     await newRule(user);
     await user.selectOptions(screen.getByLabelText("For"), "Group · Production");
-    await waitFor(() => expect(screen.getByText("In Prometheus (prod-west), fires even when OmniKrux is off")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("In Central Prometheus: fires even when OmniKrux is off.")).toBeTruthy());
     await user.click(screen.getByRole("radio", { name: "In the tool" }));
     const notify = screen.getByRole("group", { name: "Notify" });
     expect(within(notify).getByText("Contact points apply where OmniKrux installed the tools; the channel applies to the Prometheus you run.")).toBeTruthy();
@@ -350,7 +398,9 @@ describe("a source that may hold other clusters", () => {
     expect(shown.getAttribute("data-tone")).toBe("warn");
 
     await user.click(screen.getByRole("button", { name: "New alert rule" }));
-    await waitFor(() => expect((screen.getByLabelText("For") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe("prod-east"));
+    // A new rule starts on the current owner (none here: the first project by name), not the shown rule's.
+    await waitFor(() => expect((screen.getByLabelText("For") as HTMLSelectElement).selectedOptions[0]?.textContent).toBe("dev"));
+    await user.selectOptions(screen.getByLabelText("For"), "prod-east");
     expect(screen.getByText(words).getAttribute("data-tone")).toBe("warn");
     // A filter OmniKrux set (prod-west) needs no warning; the group warns for prod-east alone.
     await user.selectOptions(screen.getByLabelText("For"), "prod-west");
@@ -359,6 +409,18 @@ describe("a source that may hold other clusters", () => {
     expect(screen.getAllByText(/may include other clusters/).map((p) => p.textContent)).toEqual([words]);
     await user.selectOptions(screen.getByLabelText("For"), "dev");
     expect(screen.queryByText(/may include other clusters/)).toBeNull();
+  });
+
+  it("an in-cluster source of the project's own cluster is never called mixed", () => {
+    const own = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: "c1" })] };
+    const other = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: "c2" })] };
+    const none = { ...east, links: [link("s9", "Prometheus", { source_cluster_id: null })] };
+    const scope = { kind: "project" as const, id: "p3" };
+    expect(mixedClusterWarnings(scope, "prometheus", null, [own])).toEqual([]);
+    expect(mixedClusterWarnings(scope, "prometheus", null, [other])).toHaveLength(1);
+    expect(mixedClusterWarnings(scope, "prometheus", null, [none])).toHaveLength(1);
+    expect(mayMixClusters(own, own.links[0])).toBe(false);
+    expect(mayMixClusters(east, { ...own.links[0], filter_origin: "auto" })).toBe(false);
   });
 
   it("a rule on a project whose link is filtered says nothing", async () => {
@@ -387,7 +449,7 @@ describe("the rule form, fix round 1", () => {
     expect(threshold.value).toBe("0.8");
   });
 
-  it("Discard from New alert rule lands on Name of the new form", async () => {
+  it("Discard from New alert rule lands on the first field of the new form", async () => {
     const user = userEvent.setup();
     open();
     await newRule(user);
@@ -397,7 +459,7 @@ describe("the rule form, fix round 1", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     const name = screen.getByLabelText("Name") as HTMLInputElement;
     expect(name.value).toBe("");
-    await waitFor(() => expect(document.activeElement).toBe(name));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("For")));
   });
 
   it("a threshold that isn't a number yet counts as a change", async () => {

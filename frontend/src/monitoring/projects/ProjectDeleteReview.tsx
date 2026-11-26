@@ -25,6 +25,9 @@ export function ProjectDeleteReview({ review, busy, error, clusterName, restoreF
     const versions = (n: number) => (n === 1 ? "1 version" : `${n} versions`);
     first.push(`Dashboards that go with it: ${review.dashboards.map((d) => `${d.title} (${versions(d.versions)})`).join(", ")}.`);
   }
+  // Its matchers name each silence (they hold commas of their own, so they are set apart by ";").
+  const silences = review.silences ?? [];
+  if (silences.length > 0) first.push(`Its silences go too: ${silences.map((x) => x.matchers).join("; ")}.`);
   if (review.sources_removed.length > 0) lines.push(`Sources it created that go with it: ${names(review.sources_removed)}.`);
   if (review.sources_kept.length > 0) {
     const kept = review.sources_kept.map((x) => `${x.name} (used by ${x.used_by.join(", ")})`).join("; ");

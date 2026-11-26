@@ -7,6 +7,7 @@ from omnikrux.monitoring.dashboards.api import router as dashboards_router
 from omnikrux.monitoring.explore.api import router as explore_router
 from omnikrux.monitoring.install.api import router as install_router
 from omnikrux.monitoring.projects.api import router as projects_router
+from omnikrux.monitoring.projects.cluster_uses import router as cluster_uses_router
 from omnikrux.monitoring.query.api import router as query_router
 from omnikrux.monitoring.sources.api import finding_router
 from omnikrux.monitoring.sources.api import router as sources_router
@@ -28,6 +29,7 @@ def adopt(feature: APIRouter, into: APIRouter = router) -> None:
 adopt(sources_router)
 adopt(finding_router)
 adopt(projects_router)
+adopt(cluster_uses_router)
 adopt(query_router)
 adopt(dashboards_router)
 adopt(explore_router)

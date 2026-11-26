@@ -119,7 +119,7 @@ describe("shortcut registry", () => {
     expect(allGroups("pods").map(([t]) => t)).not.toContain("Monitoring");
     const monitoring = allGroups(undefined, "monitoring").find(([t]) => t === "Monitoring")![1];
     expect(monitoring.map((s) => [s.id, s.keys, s.label])).toEqual([
-      ["monitoringFind", ["/"], "Find a project, group or source"],
+      ["monitoringFind", ["/", "Ctrl K"], "Find a project, group or source"],
       ["monitoringTree", ["↑ ↓", "← →", "Enter"], "In the sidebar: move, close or open a group, open the item"],
       ["monitoringNewDashboard", ["N"], "New dashboard"],
       ["monitoringImport", ["I"], "Import dashboards"],
@@ -152,14 +152,16 @@ describe("shortcut registry", () => {
       ["dashboardTime", ["t"], "Pick the time range"],
       ["dashboardRefresh", ["r"], "Refresh now"],
       ["dashboardSave", ["Ctrl S"], "While editing (in fields too): save the dashboard"],
+      ["dashboardUndo", ["Ctrl Z"], "While editing: undo the last change"],
       ["panelFocus", ["← → ↑ ↓"], "While editing: move between panels"],
       ["panelMove", ["Shift ← → ↑ ↓"], "While editing: move the panel one step"],
       ["panelResize", ["Ctrl Shift ← → ↑ ↓"], "While editing: make the panel narrower, wider, shorter or taller"],
       ["panelSettings", ["Enter"], "While editing: open the panel's settings"],
       ["panelAdd", ["a"], "While editing: add a panel (type what you want to see)"],
-      ["addPanelPick", ["↑ ↓", "Enter"], "In Add panel: pick a result and add it (Ctrl+End: Empty panel; Esc clears, then closes)"],
-      ["suggestionsFocus", ["s"], "While editing a new dashboard: go to the suggestions"],
+      ["addPanelPick", ["↑ ↓ ← →", "Enter"], "In Add panel: move between results by row or card and add one (Ctrl+End: Empty panel; Esc clears, then closes)"],
+      ["suggestionsFocus", ["s"], "While editing: show the suggestions and go to them"],
       ["panelRemove", ["Ctrl Del"], "While editing: remove the panel from the draft"],
+      ["panelDuplicate", ["d"], "While editing: duplicate the panel"],
       ["panelLeave", ["Esc"], "Close the panel's settings, then go to Save dashboard"],
       ["queryRun", ["Ctrl Enter"], "In a query: run it now; in the JSON: review the changes"],
       ["chartCrosshair", ["← →"], "On a chart: move the crosshair; Esc hides it"],
@@ -214,6 +216,25 @@ describe("shortcut registry", () => {
     expect(keysFor("exploreRun", true)).toEqual(["⌘ Enter"]);
   });
 
+  it("the help sheet lists undo and duplicate", () => {
+    const dashboards = allGroups(undefined, "monitoring").find(([t]) => t === "Dashboards")![1];
+    expect(dashboards.find((s) => s.id === "dashboardUndo")).toMatchObject({ keys: ["Ctrl Z"], label: "While editing: undo the last change" });
+    expect(dashboards.find((s) => s.id === "panelDuplicate")).toMatchObject({ keys: ["d"], label: "While editing: duplicate the panel" });
+    expect(keysFor("dashboardUndo", true)).toEqual(["⌘ Z"]);
+    expect(keysFor("panelDuplicate", true)).toEqual(["d"]);
+    expect(pressed("dashboardUndo", { ...base, key: "z", ctrlKey: true })).toBe(true);
+    expect(pressed("dashboardUndo", { ...base, key: "z", metaKey: true })).toBe(true);
+    expect(pressed("dashboardUndo", { ...base, key: "z" })).toBe(false);
+    expect(pressed("dashboardUndo", { ...base, key: "z", ctrlKey: true, altKey: true })).toBe(false);
+    expect(pressed("panelDuplicate", { ...base, key: "d" })).toBe(true);
+    expect(pressed("panelDuplicate", { ...base, key: "d", ctrlKey: true })).toBe(false);
+    expect(pressed("panelDuplicate", { ...base, key: "D", shiftKey: true })).toBe(false);
+    // Kubernetes' help never lists them.
+    const kube = allGroups("pods", "kubernetes").flatMap(([, list]) => list.map((s) => s.id));
+    expect(kube).not.toContain("dashboardUndo");
+    expect(kube).not.toContain("panelDuplicate");
+  });
+
   it("explore keys match only as listed", () => {
     expect(pressed("exploreQuery", { ...base, key: "q" })).toBe(true);
     expect(pressed("exploreQuery", { ...base, key: "q", ctrlKey: true })).toBe(false);
@@ -261,6 +282,27 @@ describe("shortcut registry", () => {
     expect(pressed("monitoringNewDashboard", { ...base, key: "n", altKey: true })).toBe(false);
     expect(pressed("monitoringNewDashboard", { ...base, key: "n", metaKey: true })).toBe(false);
     expect(pressed("monitoringNewDashboard", { ...base, key: "N", ctrlKey: true, shiftKey: true })).toBe(false);
+  });
+
+  it("Monitoring's help leaves out the Kubernetes groups", () => {
+    const groups = allGroups(undefined, "monitoring");
+    expect(groups.map(([t]) => t)).toEqual(["Apps and tabs", "Monitoring", "Dashboards", "Explore", "Alerts", "Anywhere", "Logs", "Dock"]);
+    const ids = groups.flatMap(([, list]) => list.map((s) => s.id));
+    for (const id of ["moveKind", "kinds", "palette", "filter", "move", "details", "yaml", "logs", "shell", "scale", "drain"] as const) expect(ids).not.toContain(id);
+    // Alt+Down still moves into the shared dock: listed under Anywhere.
+    expect(groups.find(([t]) => t === "Anywhere")![1].map((s) => s.id)).toContain("enterLogs");
+    expect(keysFor("monitoringFind", true)).toEqual(["/", "⌘ K"]);
+    // Outside Monitoring the sheet is exactly what it was.
+    const kube = (kindKey?: string) => (["shell", "row", "logs", "global", "dock"] as const).map((scope) => [
+      { shell: "Apps and tabs", row: "Table", logs: "Logs", global: "Anywhere", dock: "Dock" }[scope],
+      SHORTCUTS.filter((s) => s.scope === scope && (kindKey === undefined || s.kinds === undefined || s.kinds.includes(kindKey))),
+    ]);
+    expect(allGroups()).toEqual(kube());
+    expect(allGroups(undefined, "kubernetes")).toEqual(kube());
+    expect(allGroups("pods", "kubernetes")).toEqual(kube("pods"));
+    expect(allGroups().find(([t]) => t === "Anywhere")![1].map((s) => s.id)).toEqual(
+      ["kinds", "palette", "filter", "help", "deleteFocused", "confirmReview"],
+    );
   });
 
   it("the sheet drops Filter rows while Monitoring is shown", () => {

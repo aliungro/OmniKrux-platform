@@ -53,3 +53,13 @@ describe("gauge panel", () => {
     expect(document.querySelector('[data-tone="warn"]')).toBeTruthy();
   });
 });
+
+describe("gauge units", () => {
+  it("min, max and value read in one CPU unit", () => {
+    draw({ unit: "cores", min: 0, max: 2 }, 0.3);
+    expect(screen.getByRole("meter").getAttribute("aria-valuetext")).toBe("0.3 cores of 0 cores to 2 cores");
+    cleanup();
+    draw({ unit: "cores", min: 0, max: 0.8 }, 0.3);
+    expect(screen.getByRole("meter").getAttribute("aria-valuetext")).toBe("300 m of 0 m to 800 m");
+  });
+});

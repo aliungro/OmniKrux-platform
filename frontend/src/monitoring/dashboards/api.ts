@@ -18,7 +18,7 @@ const enc = encodeURIComponent;
 
 export type DashboardErrorCode =
   | "invalid_dashboard" | "version_conflict" | "name_taken" | "not_found" | "unknown_owner" | "read_only" | "bad_request";
-export type ReadyKey = "cluster" | "nodes" | "namespaces" | "workloads" | "pods";
+export type ReadyKey = "cluster" | "nodes" | "namespaces" | "workloads" | "pods" | "logs";
 export type ReadyNeed = "kube_state" | "cadvisor" | "node_exporter";
 export type VersionOrigin = "created" | "copied" | "saved" | "restored" | "imported" | "updated";
 
@@ -78,6 +78,8 @@ export interface ReadyMadeOut {
   notes: string[];
   checked: boolean;
   check_message: string | null;
+  /** The Prometheus a Prometheus view reads (the one that holds its metrics); null for the Logs overview. */
+  source_name: string | null;
 }
 
 export interface LabelValuesOut {
@@ -85,6 +87,27 @@ export interface LabelValuesOut {
   values: string[];
   /** The label has more values than shown. */
   truncated: boolean;
+}
+
+/** What an empty answer is checked against: the query that ran, on its project, over its range
+ * (seconds). Prometheus sends the query's metric names, Loki its stream selector. */
+export interface WhyEmptyIn {
+  source_id: string;
+  project_id: string;
+  query: string;
+  start: number;
+  end: number;
+  metrics?: string[];
+  selector?: string | null;
+}
+
+export type WhyEmptyReason =
+  | "missing_metric" | "nothing_matched" | "missing_labels" | "no_streams" | "older_lines" | "filtered_out" | "unknown";
+
+/** Why it was empty, in OmniKrux's words; `message` is null exactly for `unknown` (nothing proved). */
+export interface WhyEmptyOut {
+  reason: WhyEmptyReason;
+  message: string | null;
 }
 
 export interface BatchError {
@@ -216,7 +239,11 @@ export const restoreVersion = (id: string, v: number, baseVersion: number) =>
   request<DashboardOut>("POST", `/dashboards/${enc(id)}/versions/${enc(String(v))}/restore`, { base_version: baseVersion });
 
 /** `title` null or left out: the source's title, made unique for the owner. */
-export const copyDashboard = (body: { from_id: string; owner_kind: OwnerKind; owner_id: string; title?: string | null }) =>
+export const copyDashboard = (body: {
+  from_id: string; owner_kind: OwnerKind; owner_id: string; title?: string | null;
+  /** The copy's variables start at these values (by name; "all" or the values). */
+  defaults?: Record<string, "all" | string[]>;
+}) =>
   request<DashboardOut>("POST", "/dashboards/copy", body);
 
 export const readyMade = (projectId: string) => request<ReadyMadeOut[]>("GET", `/projects/${enc(projectId)}/ready-made`);
@@ -240,6 +267,10 @@ export async function runBatch(queries: QueryRequest[], signal?: AbortSignal): P
   const out = await request<{ results: BatchItemOut[] }>("POST", "/query/batch", { queries }, signal);
   return out.results;
 }
+
+/** Why a query that ran came back empty. A plain read: it changes nothing, so no mutation cache. */
+export const whyEmpty = (body: WhyEmptyIn, signal?: AbortSignal) =>
+  request<WhyEmptyOut>("POST", "/query/why-empty", body, signal);
 
 // --- Hooks ------------------------------------------------------------------------------------
 
@@ -269,12 +300,13 @@ export const useLabelValues = (p: LabelValuesParams | null): UseQueryResult<Labe
   });
 
 /**
- * Keys a dashboard change leaves alone: panel queries, label values and catalogs did not change, and
+ * Keys a dashboard change leaves alone: panel queries, label values, catalogs and empty reasons did not change, and
  * an alert's dry run answers for the alert as written in an open Alert tab, which a save doesn't change.
  */
 function keepsData(key: readonly unknown[]): boolean {
   return key[0] === "monitoring"
-    && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog" || (key[1] === "alerts" && key[2] === "dryRun"));
+    && (key[1] === "panel" || key[1] === "labelValues" || key[1] === "catalog" || key[1] === "why-empty"
+      || (key[1] === "alerts" && key[2] === "dryRun"));
 }
 
 /**

@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AuditRecord, Cluster } from "../../api/types";
 import { AuditView } from "./AuditView";
+import { whatOf } from "./labels";
 import { fakeColumnLayout } from "../../test/layout";
 import { defaultWorkspace, workspaceReducer } from "../shell/workspace";
 
@@ -491,10 +492,38 @@ describe("monitoring entries", () => {
     serve(() => ({ records: [monitoring()], next_before: null }));
     show();
     const row = await screen.findByRole("row", { name: /Added a source/ });
-    expect(within(row).getAllByText("Monitoring")).toHaveLength(2);
-    expect(within(row).getByText("source")).toBeTruthy();
+    expect(within(row).getAllByText("Monitoring")).toHaveLength(1);
+    expect(within(row).getByText("Source")).toBeTruthy();
     expect(within(row).getByText("Prometheus main")).toBeTruthy();
     expect(within(row).queryByText("K8S")).toBeNull();
+  });
+
+  it("a Monitoring record says what changed in words", async () => {
+    serve(() => ({ records: [
+      monitoring({ id: 3, action: "project_change", kind: "project", name: "Shop", details: { linked: "Metrics", filter: "", change: "Linked Metrics with no filter." } }),
+      monitoring({ id: 2, action: "grafana_remove", kind: "grafana", name: "Main", details: { dashboards_imported: 2, handed_to: "Backup" } }),
+      monitoring({ id: 1, action: "source_add", kind: "source", name: "Metrics", details: { type: "prometheus" } }),
+    ], next_before: null }));
+    show();
+    fireEvent.click(await screen.findByRole("row", { name: /Added a source/ }));
+    expect(await screen.findByText("Nothing stored to compare. The details below say what changed.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("row", { name: /Removed a Grafana connection/ }));
+    expect(await screen.findByText("Its imported dashboards were handed to Backup.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("row", { name: /Shop/ }));
+    expect(await screen.findByText("Linked Metrics with no filter.")).toBeTruthy();
+  });
+
+  it("Monitoring rows name their kind in words", () => {
+    const kinds = { source: "Source", project: "Project", group: "Group", dashboard: "Dashboard", alert_rule: "Alert rule",
+      contact_point: "Contact point", silence: "Silence", loki_rule: "Loki rule", grafana: "Grafana connection" };
+    for (const [kind, word] of Object.entries(kinds)) {
+      expect(whatOf({ app: "monitoring", action: "x", kind, name: "n", details: null })).toEqual({ kind: word, name: "n" });
+    }
+  });
+
+  it("Kubernetes rows read as before", () => {
+    expect(whatOf({ app: "kubernetes", action: "scale", kind: "deployments.apps", name: "web", details: null })).toEqual({ kind: "deployment", name: "web" });
+    expect(whatOf({ app: "kubernetes", action: "scale", kind: "sources", name: "web", details: null })).toEqual({ kind: "source", name: "web" });
   });
 
   it("Kubernetes rows are unchanged", async () => {
@@ -518,7 +547,7 @@ describe("monitoring entries", () => {
     for (const [label, name] of [["Restored a dashboard version", "API latency"], ["Removed a dashboard", "Errors"],
       ["Saved a dashboard", "API latency"], ["Added a dashboard", "Errors"]]) {
       const row = await screen.findByRole("row", { name: new RegExp(label) });
-      expect(within(row).getByText("dashboard")).toBeTruthy();
+      expect(within(row).getByText("Dashboard")).toBeTruthy();
       expect(within(row).getByText(name)).toBeTruthy();
     }
     const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
@@ -541,6 +570,25 @@ describe("monitoring entries", () => {
     const select = screen.getByRole("combobox", { name: "Action" }) as HTMLSelectElement;
     const labels = Array.from(select.options).map((o) => o.textContent);
     for (const [, , label] of pairs) expect(labels).toContain(label);
+  });
+
+  it("a Monitoring kind named like an inherited property reads as its own word", async () => {
+    serve(() => ({ records: [monitoring({ id: 3, action: "silence_add", kind: "constructor", name: "odd" })], next_before: null }));
+    show();
+    const row = await screen.findByRole("row", { name: /odd/ });
+    expect(within(row).getByText("constructor")).toBeTruthy();
+  });
+
+  it("removing an expired silence has its own words", async () => {
+    serve(() => ({ records: [
+      monitoring({ id: 2, action: "silence_remove", kind: "silence", name: 'alertname="a"', details: { removed_expired: true, matchers: 'alertname="a"' } }),
+      monitoring({ id: 1, action: "silence_remove", kind: "silence", name: 'alertname="b"', details: { matchers: 'alertname="b"' } }),
+    ], next_before: null }));
+    show();
+    const removed = await screen.findByRole("row", { name: /Removed an expired silence/ });
+    expect(within(removed).getByText('alertname="a"')).toBeTruthy();
+    const expired = screen.getByRole("row", { name: /Expired a silence/ });
+    expect(within(expired).getByText('alertname="b"')).toBeTruthy();
   });
 
   it("install and uninstall read in words", async () => {
@@ -571,7 +619,7 @@ describe("monitoring entries", () => {
     show();
     for (const [, kind, name, label] of rows) {
       const row = await screen.findByRole("row", { name: new RegExp(label) });
-      expect(within(row).getByText(kind)).toBeTruthy();
+      expect(within(row).getByText({ dashboard: "Dashboard", project: "Project", grafana: "Grafana connection" }[kind]!)).toBeTruthy();
       expect(within(row).getByText(name)).toBeTruthy();
     }
     const exported = screen.getAllByRole("row").filter((r) => /Exported from Monitoring/.test(r.textContent ?? ""));

@@ -4,7 +4,7 @@ import { BAD_FILTER, NO_METRIC_NAME, validFilter } from "../projects/FilterField
 import type { ImportPreviewOut, PreviewDashboardOut } from "../transfer/api";
 import { keepableGrafana, keepableSource, pruneSetupDrafts, readSetupDraft, removeSetupDraft, SETUP_DRAFT_PREFIX, writeSetupDraft } from "./setupDraftStore";
 import {
-  blockedBy, canContinue, grafanaFromDiscovery, hasImportStep, importCommitBody, installComponents, picksFromDiscovery, setupBody,
+  blockedBy, canContinue, grafanaFromDiscovery, hasImportStep, importCommitBody, installComponents, picksFromDiscovery, setupBody, uniqueName,
   type SetupDraft, type SetupImport, type SetupPick,
 } from "./setupModel";
 
@@ -314,3 +314,13 @@ describe("setup import from Grafana (M6)", () => {
 function clearStorage() {
   localStorage.clear();
 }
+
+describe("uniqueName", () => {
+  it("keeps a free name and numbers a taken one, whatever the case", () => {
+    expect(uniqueName("Dev", [])).toBe("Dev");
+    expect(uniqueName("Dev", ["Other"])).toBe("Dev");
+    expect(uniqueName("Dev", ["dev"])).toBe("Dev 2");
+    expect(uniqueName("Dev", ["Dev", "DEV 2"])).toBe("Dev 3");
+    expect(uniqueName("", ["x"])).toBe("");
+  });
+});

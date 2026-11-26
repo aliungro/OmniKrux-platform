@@ -36,6 +36,17 @@ describe("ownerCatalog", () => {
     expect(merged.metrics[0]).toMatchObject({ series: 1, projectIds: ["a"] });
   });
 
+  it("Prometheus notes never show for a logs list", () => {
+    const a = catalogOf("a",
+      source("s1", { notes: ["Labels per metric come from the first 50000 series."] }),
+      source("s2", { source_type: "loki", notes: ["Only the newest streams are listed."] }),
+    );
+    const one = ownerCatalog([{ project: projectOf("a", "Shop"), catalog: a, error: null }], "project");
+    expect(one.notesBy.loki).toEqual(["Only the newest streams are listed."]);
+    expect(one.notesBy.prometheus).toEqual(["Labels per metric come from the first 50000 series."]);
+    expect(one.notes).toEqual([...one.notesBy.prometheus, ...one.notesBy.loki]);
+  });
+
   it("failed sources become problems in words", () => {
     const a = catalogOf("a",
       source("s1", { source_name: "Prometheus · b", state: "error", message: "Can't reach http://prom:9090." }),

@@ -14,6 +14,7 @@ from omnikrux.monitoring.transfer import export as export_module
 from omnikrux.monitoring.transfer.alerts import import_alert
 from omnikrux.monitoring.transfer.envelope import read_envelope
 from omnikrux.monitoring.transfer.export import export_file_name
+from tests.monitoring.fakes import serve_fake_prometheus
 from tests.monitoring.test_panel_alerts import ALERT
 from tests.monitoring.test_rules_api import as_tool, monitoring_records
 
@@ -248,12 +249,80 @@ async def test_export_a_ready_made_view(monitoring_app, kube_cluster, fake_prome
     assert out["file_name"] == "cluster-health.omnikrux.json"
     [entry] = out["export"]["dashboards"]
     assert entry["exportId"] == ready and entry["dashboard"]["title"] == "Cluster health"
-    assert out["export"]["sources"] == [] and out["dashboards"] == 1
+    # The view reads the project's Prometheus by its id, so the file carries it.
+    assert [s["name"] for s in out["export"]["sources"]] == ["Prometheus"]
+    assert out["dashboards"] == 1
 
     # A view the project doesn't have, or a project that is gone: not found.
     for id in (f"ready:{project.id}:nope", "ready:gone:cluster"):
         r = await http.post(EXPORT, json={"kind": "dashboard", "id": id})
         assert r.status_code == 404 and r.json()["detail"]["message"] == EXPORT_GONE
+
+
+async def test_exporting_a_ready_made_view_keeps_its_prometheus(
+    monitoring_app, kube_cluster, fake_prometheus
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    project = await services.projects.create("prod-east", "kubernetes", kube_cluster)
+    async with serve_fake_prometheus() as second:
+        for fake in (fake_prometheus, second):
+            fake.label_values_from_series = True
+        fake_prometheus.series = [{"__name__": "container_cpu_usage_seconds_total"}]
+        second.series = [
+            {"__name__": name} for name in ("kube_pod_info", "container_cpu_usage_seconds_total")
+        ]
+        operator = await services.sources.create(
+            NewSource(name="Operator", type="prometheus", reach="url", url=fake_prometheus.url)
+        )
+        server = await services.sources.create(
+            NewSource(name="Server", type="prometheus", reach="url", url=second.url)
+        )
+        await link(services, project.id, operator.id, "")
+        await link(services, project.id, server.id, 'cluster="prod-east"')
+        second.series = [s | {"cluster": "prod-east"} for s in second.series]
+
+        out = await export(http, "dashboard", f"ready:{project.id}:cluster")
+    # Only the Prometheus that has kube-state-metrics is in the file, and every query names it.
+    [source] = out["export"]["sources"]
+    assert (source["key"], source["name"]) == ("src-1", "Server")
+    doc = out["export"]["dashboards"][0]["dashboard"]
+    ids = {q["source"]["id"] for p in doc["panels"] for q in p["queries"]}
+    assert ids == {"src-1"}
+    assert source["filter"] == 'cluster="prod-east"'
+    assert operator.id not in str(out) and server.id not in str(out)
+
+
+async def test_exporting_the_logs_overview_uses_the_discovered_labels(
+    monitoring_app, kube_cluster, fake_loki
+):
+    http, app = monitoring_app
+    services = app.state.monitoring
+    project = await services.projects.create("prod-east", "kubernetes", kube_cluster)
+    source = await services.sources.create(
+        NewSource(name="Logs", type="loki", reach="url", url=fake_loki.url)
+    )
+    await link(services, project.id, source.id, 'cluster="prod-east"')
+    fake_loki.series = [
+        {"k8s_namespace_name": "shop", "k8s_pod_name": "api-1", "level": "warn"},
+        {"namespace": "old"},
+    ]
+    ready = f"ready:{project.id}:logs"
+    out = await export(http, "dashboard", ready)
+    assert out["file_name"] == "logs-overview.omnikrux.json"
+    [entry] = out["export"]["dashboards"]
+    doc = entry["dashboard"]
+    assert entry["exportId"] == ready and doc["title"] == "Logs overview"
+    exprs = [q["expr"] for p in doc["panels"] for q in p["queries"]]
+    assert exprs and all('k8s_namespace_name=~".+"' in e for e in exprs)
+    assert any("sum by (level)" in e for e in exprs)
+    assert out["export"]["sources"] == []
+    [series] = [r for r in fake_loki.requests if r.path == "/loki/api/v1/series"]
+    assert series.params["match[]"] == ['{cluster="prod-east"}']
+
+    # Pod health isn't the project's (no Prometheus), so it can't be exported.
+    r = await http.post(EXPORT, json={"kind": "dashboard", "id": f"ready:{project.id}:pods"})
+    assert r.status_code == 404 and r.json()["detail"]["message"] == EXPORT_GONE
 
 
 async def test_group_export_lists_member_names_and_no_sources(monitoring_app, linked_project):

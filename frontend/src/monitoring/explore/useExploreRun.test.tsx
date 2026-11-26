@@ -1,10 +1,10 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LinkOut, ProjectOut, QueryRequest, QueryResponse } from "../api/types";
-import { UNREADABLE } from "../build/promql";
+import { ONE_QUERY, UNREADABLE } from "../build/promql";
 import { DashboardRequestError, type BatchItemOut } from "../dashboards/api";
 import { stepFor } from "../dashboards/time";
-import { EXPLORE_DEBOUNCE_MS, useExploreRun } from "./useExploreRun";
+import { EXPLORE_DEBOUNCE_MS, FIX_QUERY, useExploreRun, useLinesRun } from "./useExploreRun";
 
 const runBatch = vi.fn<(q: QueryRequest[], s?: AbortSignal) => Promise<BatchItemOut[]>>();
 vi.mock("../dashboards/api", async (orig) => ({
@@ -151,6 +151,89 @@ describe("useExploreRun", () => {
     await flush();
     expect(result.current.state.status).toBe("invalid");
     expect(result.current.state.lastGood).toBeNull();
+  });
+
+  it("several queries are invalid without a request", async () => {
+    runBatch.mockResolvedValue([ok(1)]);
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    rerender({ expr: "up\nrate(x[5m])" });
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toMatchObject({ status: "invalid", message: ONE_QUERY, failure: null });
+    expect(result.current.state.lastGood?.expr).toBe("up");
+  });
+
+  it("a whole batch refused as a bad request is invalid, not a failure", async () => {
+    runBatch.mockResolvedValueOnce([ok(1)]);
+    runBatch.mockRejectedValueOnce(new DashboardRequestError(400, "bad_request", "The query isn't valid LogQL."));
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    rerender({ expr: "up2" });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", shown: "invalid", message: "The query isn't valid LogQL.", failure: null });
+    expect(result.current.state.lastGood?.expr).toBe("up");
+  });
+
+  it("a refusal without words says to fix the query, never to try again", async () => {
+    const silent = (code: "bad_query" | "bad_request"): BatchItemOut => ({ ok: false, response: null, error: { code, message: "", status: 400 } });
+    runBatch.mockResolvedValueOnce([silent("bad_query")]);
+    runBatch.mockRejectedValueOnce(new DashboardRequestError(400, "bad_request", ""));
+    const { result, rerender } = renderHook(({ expr }) => useExploreRun(input(expr)), { initialProps: { expr: "up" } });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query. Fix the query to run it again." });
+    rerender({ expr: "up2" });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query. Fix the query to run it again." });
+    // The lines' note adds the fix words itself, so their message is the refusal alone.
+    runBatch.mockResolvedValueOnce([silent("bad_query")]);
+    const lines = renderHook(() => useLinesRun({ project, source: project.links[1], query: '{a="b"}', range, window: null }));
+    await flush();
+    expect(lines.result.current.state).toMatchObject({ status: "invalid", message: "The source couldn't read this query." });
+    expect(FIX_QUERY).toBe("Fix the query to run it again.");
+  });
+
+  it("a run that is off sends nothing and stays idle", async () => {
+    let first!: (r: BatchItemOut[]) => void;
+    runBatch.mockImplementationOnce(() => new Promise((res) => { first = res; }));
+    runBatch.mockResolvedValue([ok(1)]);
+    const { result, rerender } = renderHook(
+      ({ expr, enabled }) => useExploreRun({ ...input(expr), enabled }),
+      { initialProps: { expr: "up", enabled: true } },
+    );
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    // Turned off while its answer is on its way: the answer is dropped, nothing is kept.
+    rerender({ expr: '{app="x"}', enabled: false });
+    await act(async () => { result.current.run(true); });
+    await flush(1000);
+    await act(async () => { first([ok(1)]); });
+    expect(runBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.state).toMatchObject({ status: "idle", shown: "idle", data: null, lastGood: null, request: null });
+    // On again: it runs as before.
+    rerender({ expr: "up", enabled: true });
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(2);
+    expect(result.current.state.status).toBe("done");
+  });
+
+  it("log lines: a refused text is invalid, an unreachable Loki failed, several queries send nothing", async () => {
+    const lokiSource = project.links[1];
+    runBatch.mockResolvedValueOnce([refused("bad_query", "parse error at line 2, col 1: syntax error: unexpected {")]);
+    runBatch.mockResolvedValueOnce([refused("unreachable", "Loki didn't answer in time.")]);
+    const lines = (query: string) => ({ project, source: lokiSource, query, range, window: null, timeText: "Last 1 hour" });
+    const { result, rerender } = renderHook(({ query }) => useLinesRun(lines(query)), { initialProps: { query: '{a="b"} |=\n{c="d"}' } });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "invalid", shown: "invalid", lines: [], request: null });
+    expect(result.current.state.message).toBe("parse error at line 2, col 1: syntax error: unexpected {");
+    rerender({ query: '{a="b"}' });
+    await flush();
+    expect(result.current.state).toMatchObject({ status: "failed", shown: "failed", message: "Loki didn't answer in time.", lines: [] });
+    rerender({ query: '{a="b"}\n{c="d"}' });
+    await flush();
+    expect(runBatch).toHaveBeenCalledTimes(2);
+    expect(result.current.state).toMatchObject({ status: "invalid", shown: "invalid", message: ONE_QUERY });
+    expect(result.current.state.at).not.toBeNull();
   });
 
   it("another project or source starts over, the last good result included", async () => {

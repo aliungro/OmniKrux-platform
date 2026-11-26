@@ -75,6 +75,13 @@
   font-size: 12.5px;
 }
 
+/* A long choice (a source's name) is cut in its column, never past the edge. */
+.input {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .query {
   min-height: 72px;
   padding: 8px 10px;
@@ -393,8 +400,56 @@
   cursor: pointer;
 }
 
+/* A box in the form's own tokens (no native look): the ground and rule of the inputs, filled with the
+   focus blue and a ground-coloured tick when on. */
 .check input {
-  accent-color: var(--focus);
+  appearance: none;
+  display: grid;
+  place-content: center;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+  align-self: center;
+}
+
+.check input::before {
+  content: "";
+  width: 7px;
+  height: 4px;
+  margin-top: -2px;
+  border-left: 1.75px solid var(--bg);
+  border-bottom: 1.75px solid var(--bg);
+  transform: rotate(-45deg) scale(0);
+}
+
+.check input:checked {
+  border-color: var(--focus);
+  background: var(--focus);
+}
+
+.check input:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+.check input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.check:hover input:not(:checked) {
+  border-color: color-mix(in srgb, var(--focus) 55%, var(--rule));
+}
+
+/* Notify and Channel take turns here: one least height, so the fields below never jump. */
+.notifySlot {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 76px;
 }
 
 .checkName {

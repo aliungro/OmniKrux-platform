@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearTrail, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trailStore";
+import { textLanguage } from "./languageHold";
+import { trailWords } from "./Trail";
+import { clearTrail, normalizeQuery, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trailStore";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
@@ -15,13 +17,14 @@ describe("trail", () => {
     expect(trail[0].expr).toBe("q5");
     expect(trail[19].expr).toBe("q24");
 
-    // A repeat (same text and source) moves to the end; the same text on another source is its own entry.
+    // A repeat (same text and source) moves to the end; the same text on another source is the same
+    // entry too (Task 8: one chip per text), and the newest keeps its source.
     trail = pushTrail("p1", { expr: "q10", sourceId: "s1", at: 100 });
     expect(trail).toHaveLength(20);
     expect(trail.filter((e) => e.expr === "q10")).toHaveLength(1);
     expect(trail[19]).toEqual({ expr: "q10", sourceId: "s1", at: 100 });
     trail = pushTrail("p1", { expr: "q10", sourceId: "s2", at: 101 });
-    expect(trail.filter((e) => e.expr === "q10").map((e) => e.sourceId)).toEqual(["s1", "s2"]);
+    expect(trail.filter((e) => e.expr === "q10").map((e) => e.sourceId)).toEqual(["s2"]);
     expect(readTrail("p1")).toEqual(trail);
 
     // Each project has its own trail.
@@ -43,5 +46,75 @@ describe("trail", () => {
     expect(readTrail("p1")).toEqual([]);
     expect(pushTrail("p1", { expr: "up", sourceId: "s1", at: 5 })).toEqual([{ expr: "up", sourceId: "s1", at: 5 }]);
     expect(() => clearTrail("p1")).not.toThrow();
+  });
+
+  it("the trail keeps each query once", () => {
+    pushTrail("p1", { expr: '{job="x"}', sourceId: "l1", at: 1 });
+    pushTrail("p1", { expr: '{job="x"} ', sourceId: "l1", at: 2 });
+    pushTrail("p1", { expr: 'up', sourceId: "s1", at: 3 });
+    pushTrail("p1", { expr: '{job="x"}', sourceId: "l2", at: 4 });
+    expect(readTrail("p1")).toEqual([
+      { expr: "up", sourceId: "s1", at: 3 },
+      { expr: '{job="x"}', sourceId: "l2", at: 4 },
+    ]);
+    // A trail stored before this rule is read with each query once, the newest copy kept.
+    localStorage.setItem(`${TRAIL_PREFIX}p2`, JSON.stringify([
+      { expr: "sum(up)", sourceId: "s1", at: 1 },
+      { expr: "rate(x[5m])", sourceId: "s1", at: 2 },
+      { expr: " sum( up )", sourceId: "s2", at: 3 },
+      { expr: "sum(  up )", sourceId: "s3", at: 4 },
+    ]));
+    expect(readTrail("p2")).toEqual([
+      { expr: "sum(up)", sourceId: "s1", at: 1 },
+      { expr: "rate(x[5m])", sourceId: "s1", at: 2 },
+      { expr: "sum(  up )", sourceId: "s3", at: 4 },
+    ]);
+  });
+
+  it("queries compare by their text, spacing outside quotes aside", () => {
+    expect(normalizeQuery("  sum  by (job)\n\t(rate(x[5m]))  ")).toBe("sum by (job) (rate(x[5m]))");
+    expect(normalizeQuery('{app="a  b"}  |=  "x   y"')).toBe('{app="a  b"} |= "x   y"');
+    expect(normalizeQuery('{a="q\\"  r"}   x')).toBe('{a="q\\"  r"} x');
+    expect(normalizeQuery("`a   b`   c")).toBe("`a   b` c");
+    expect(normalizeQuery("sum( up )")).not.toBe(normalizeQuery("sum(up)"));
+  });
+});
+
+describe("trail chips", () => {
+  it("a chip names its source, and says it when the source is another", () => {
+    const entry = { expr: "rate(x[5m])", sourceId: "s3", at: 1 };
+    expect(trailWords(entry, "Operator Prometheus", true)).toEqual({ text: "rate(x[5m])", title: "rate(x[5m]) · Operator Prometheus" });
+    expect(trailWords(entry, "Operator Prometheus", false)).toEqual({ text: "rate(x[5m]) · Operator Prometheus", title: "rate(x[5m]) · Operator Prometheus" });
+    // A long text is cut on the chip, never in its title.
+    const long = { ...entry, expr: `sum(rate(${"a".repeat(60)}[5m]))` };
+    expect(trailWords(long, "P", false).text).toMatch(/^sum\(rate\(a+… · P$/);
+    expect(trailWords(long, "P", false).title).toBe(`${long.expr} · P`);
+    // A source the project no longer links is named as such, by the name the trail kept if any.
+    expect(trailWords(entry, "Old Prometheus", false, false)).toEqual({
+      text: "rate(x[5m]) · Old Prometheus (not linked)", title: "rate(x[5m]) · Old Prometheus (not linked)",
+    });
+    expect(trailWords(entry, null, false, false)).toEqual({ text: "rate(x[5m]) · source not linked", title: "rate(x[5m]) · source not linked" });
+  });
+
+  it("the trail keeps the name and kind of the source a query ran on", () => {
+    pushTrail("p1", { expr: "up", sourceId: "s1", at: 1, sourceName: "Prom", sourceType: "prometheus" });
+    pushTrail("p1", { expr: "{a=\"b\"}", sourceId: "l1", at: 2 });
+    expect(readTrail("p1")).toEqual([
+      { expr: "up", sourceId: "s1", at: 1, sourceName: "Prom", sourceType: "prometheus" },
+      { expr: "{a=\"b\"}", sourceId: "l1", at: 2 },
+    ]);
+    // A damaged kind is dropped, never trusted.
+    localStorage.setItem(TRAIL_PREFIX + "p2", JSON.stringify([{ expr: "up", sourceId: "s1", at: 1, sourceName: 7, sourceType: "alertmanager" }]));
+    expect(readTrail("p2")).toEqual([{ expr: "up", sourceId: "s1", at: 1 }]);
+  });
+
+  it("a text's language is read from it only when it can't be anything else", () => {
+    expect(textLanguage("rate(http_requests_total[5m])")).toBe("PromQL");
+    expect(textLanguage("up")).toBe("PromQL");
+    expect(textLanguage('{app="api"} |= "error"')).toBe("LogQL");
+    expect(textLanguage('sum(rate({app="api"} | json [5m]))')).toBe("LogQL");
+    // A bare selector reads in both.
+    expect(textLanguage('{app="api"}')).toBeNull();
+    expect(textLanguage("")).toBeNull();
   });
 });
