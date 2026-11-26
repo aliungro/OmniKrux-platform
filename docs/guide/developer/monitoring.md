@@ -429,7 +429,7 @@ Unknown keys are refused. The problems' copy is in `dashboards/schema.py` and th
 - `$__range` is refused for an alert;
 - a page rule and a dry run take raw text through the same step without a document: any other `$name` is refused ("Uses $name, which isn't a variable here. Write the value into the query."), and the stored `expr` is the substituted text.
 
-A rule's check is `eval_expr(expr, of)` (the query, or `sum(query)` for `total`). A tool's rule text is `condition_expr`: the same wrapped in the comparison (a line feed ends the operand so a trailing `#` comment can't swallow it). A Loki query that returns log lines (it starts with `{`) is refused with an example of a metric query.
+A rule's check is `eval_expr(expr, of)` (the query, or `sum(query)` for `total`). A tool's rule text is `condition_expr`: the same wrapped in the comparison as written (`(vector(1)) > 0`); only when the query ends inside a `#` comment does a line feed close it, so the comment can't swallow the bracket. Texts stored with the older line feed compare equal (`same_query_text`), so they are not rewritten. A Loki query that returns log lines (it starts with `{`) is refused with an example of a metric query.
 
 ### The engine
 
