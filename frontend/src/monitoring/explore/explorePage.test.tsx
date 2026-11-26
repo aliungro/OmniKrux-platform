@@ -126,6 +126,16 @@ describe("Explore", () => {
     expect(meta().textContent).not.toContain("No metric named");
   });
 
+  it("an answer with series never says the metric is missing", async () => {
+    shop({}, three, {
+      catalogs: { p1: catalogOf("p1", source("s1", { state: "ok", metrics: [metric("http_requests_total", { series: 3 })] })) },
+    });
+    await openExplore({ page: "explore", project: "p1", expr: "rate(newer_total[5m])" });
+    await waitFor(() => expect(meta().textContent).toContain("✓ 3 series"));
+    await pause(50);
+    expect(meta().textContent).not.toContain("No metric named");
+  });
+
   it("a partial catalog names no missing metric", async () => {
     shop({}, { result_type: "matrix", series: [], took_ms: 5 }, {
       catalogs: { p1: catalogOf("p1", source("s1", { state: "partial", metrics: [metric("http_requests_total", { series: 3 })] })) },

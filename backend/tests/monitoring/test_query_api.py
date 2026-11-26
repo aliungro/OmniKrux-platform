@@ -434,5 +434,16 @@ async def test_query_route_uses_the_plain_words(monitoring_app, linked_project, 
     assert error(r) == (
         400,
         "bad_query",
+        "The query doesn't read: a bracket is never closed.",
+    )
+
+    # Without a project filter the text is the user's own: its position is theirs too.
+    fake_prometheus.errors["sum(up"] = (
+        'invalid parameter "query": 1:5: parse error: unclosed left parenthesis'
+    )
+    r = await http.post(QUERY, json={**body, "project_id": None, "query": "sum(up"})
+    assert error(r) == (
+        400,
+        "bad_query",
         "The query doesn't read at line 1, column 5: a bracket is never closed.",
     )

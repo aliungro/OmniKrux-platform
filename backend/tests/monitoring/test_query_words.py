@@ -49,3 +49,14 @@ def test_unknown_errors_pass_through():
     assert plain_query_error("promql", "the query time range exceeds the limit (x)") == (
         "the query time range exceeds the limit (x)"
     )
+
+
+def test_a_filtered_query_drops_the_position():
+    text = 'invalid parameter "query": 1:32: parse error: unclosed left parenthesis'
+    assert plain_query_error("promql", text, positioned=False) == (
+        "The query doesn't read: a bracket is never closed."
+    )
+    logql = "parse error at line 1, col 7: syntax error: unexpected $end, expecting } or ,"
+    assert plain_query_error("logql", logql, positioned=False) == (
+        "The query doesn't read: the selector isn't closed with }."
+    )

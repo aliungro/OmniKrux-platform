@@ -284,11 +284,13 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const missingMetric = useMemo(() => {
     if (!catalog || !source || source.source_type !== "prometheus" || catalog.ownerKind !== "project") return null;
     if (catalog.sourceStates?.[source.source_id] !== "ok") return null;
-    if (state.shown !== "done" || state.expr !== expr) return null;
+    // Only an empty answer to this very text, project and source: a run that found series proves nothing missing.
+    if (state.shown !== "done" || state.expr !== expr || state.data?.series.length !== 0) return null;
+    if (state.projectId !== project || state.sourceId !== source.source_id) return null;
     const known = new Set(catalog.metrics.filter((m) => m.sourceId === null || m.sourceId === source.source_id).map((m) => m.name));
     const name = metricNames(expr).find((n) => !known.has(n));
     return name ? NO_SUCH_METRIC.replace("{name}", name).replace("{source}", source.source_name) : null;
-  }, [catalog, source, state.shown, state.expr, expr]);
+  }, [catalog, source, project, state.shown, state.expr, state.data, state.projectId, state.sourceId, expr]);
   const applyRec = (apply: (p: PanelSpec) => PanelSpec): string | void => {
     const next = apply(recPanel).queries[0]?.expr;
     if (next === undefined || next === expr) return;

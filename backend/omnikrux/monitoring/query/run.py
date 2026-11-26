@@ -197,11 +197,11 @@ def _filtered(connector: Connector, query: str, matchers: Sequence[Matcher]) -> 
         raise QueryError(400, "bad_query", str(exc)) from None
 
 
-def _rejected(connector: Connector, exc: QueryRejected) -> QueryError:
+def _rejected(connector: Connector, exc: QueryRejected, filtered: bool) -> QueryError:
     """A tool's refusal; a `bad_query` one in plain words (anything unrecognised unchanged)."""
     message = exc.message
     if exc.code == "bad_query" and connector.language in ("promql", "logql"):
-        message = plain_query_error(connector.language, message)
+        message = plain_query_error(connector.language, message, positioned=not filtered)
     return QueryError(exc.status, exc.code, message)
 
 
@@ -237,7 +237,7 @@ async def run_query(services: MonitoringServices, req: QueryRequest) -> QueryRes
     except SourceUnreachable as exc:
         raise transport_error(exc) from None
     except QueryRejected as exc:
-        raise _rejected(connector, exc) from None
+        raise _rejected(connector, exc, req.project_id is not None) from None
     took_ms = int((time.perf_counter() - began) * 1000)
 
     return QueryResponse(
@@ -318,6 +318,6 @@ async def read_label_values(
     except SourceUnreachable as exc:
         raise transport_error(exc) from None
     except QueryRejected as exc:
-        raise _rejected(connector, exc) from None
+        raise _rejected(connector, exc, bool(matchers)) from None
     values.sort()
     return values[:MAX_LABEL_VALUES], len(values) > MAX_LABEL_VALUES

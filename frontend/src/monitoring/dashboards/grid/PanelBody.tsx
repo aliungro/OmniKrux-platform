@@ -28,7 +28,8 @@ export function PanelBody({ panel, run, result, waiting, changeId, animate }: Pr
   const logsInChart = logQueryInChart(panel);
   // A window shorter than the step is a cause seen from the text alone: it speaks first, and no check is asked.
   const isEmpty = !waiting && data?.state === "empty" && !logsInChart;
-  const hint = isEmpty ? panelWindowHint(run) : null;
+  // Never over a dimmed older result: the run's step belongs to the newer question.
+  const hint = isEmpty && !result.stale ? panelWindowHint(run) : null;
   const reason = usePanelEmptyReason(panel, run, isEmpty && hint === null, !waiting && !result.fetching);
   // Waiting on variables, nothing read yet, or the last thing kept is from before this panel had a run.
   if (waiting || data === null || (data.state === "noQuery" && run.requests.length > 0)) {

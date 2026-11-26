@@ -6,6 +6,7 @@ from typing import Literal
 
 Language = Literal["promql", "logql"]
 
+UNREADABLE = "The query doesn't read: {plain}."
 UNREADABLE_AT = "The query doesn't read at line {line}, column {col}: {plain}."
 RANGE_LIMIT = "This Loki answers at most {limit} per query. Pick a shorter time range."
 
@@ -46,10 +47,14 @@ def _span_words(text: str) -> str | None:
     return None
 
 
-def plain_query_error(language: Language, text: str) -> str:
-    """The words for a tool's parse or range-limit error; the text itself when not recognised."""
+def plain_query_error(language: Language, text: str, positioned: bool = True) -> str:
+    """The words for a tool's parse or range-limit error; the text itself when not recognised.
+    `positioned` is False when the project's filter was added to the text first: the tool's line
+    and column then belong to text the user never wrote, so they are left out."""
     pattern = _PROMQL if language == "promql" else _LOGQL
     if (m := pattern.search(text)) is not None:
+        if not positioned:
+            return UNREADABLE.format(plain=_plain(m.group(3)))
         return UNREADABLE_AT.format(line=m.group(1), col=m.group(2), plain=_plain(m.group(3)))
     if language == "logql" and (m := _RANGE.search(text)) is not None:
         words = _span_words(m.group(1))

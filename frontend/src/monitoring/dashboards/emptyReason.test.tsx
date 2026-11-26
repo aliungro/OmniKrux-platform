@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { QueryRequest } from "../api/types";
 import { installFakeMonitoringApi, type FakeMonitoringApi } from "../test/fakeMonitoringApi";
@@ -206,5 +206,30 @@ describe("A window shorter than the step", () => {
     expect(screen.queryByText(MISSING)).toBeNull();
     // Said before any server check, and the check isn't asked.
     expect(api.requests.filter((r) => r.url === "/api/monitoring/query/why-empty")).toHaveLength(0);
+  });
+
+  it("a dimmed older result never wears the new run's hint", async () => {
+    const user = userEvent.setup();
+    installFakeMonitoringApi({
+      projects: [linkedProject("p1", "Shop", "s1")],
+      dashboards: { d1: seedDashboard("d1", SHOP, spec("CPU", [panel("p-1", "Rate", "rate(up[5m])", { x: 0, y: 0, w: 12, h: 8 })])) },
+      queryAnswers: { "rate(up[5m])": none },
+    }, async () => json([]));
+    renderMonitoringApp({ tabs: tabsWith({ page: "dashboard", id: "d1" }) });
+    await screen.findByText("No data in this time range.");
+    expect(screen.queryByText(/longer than the query's window/)).toBeNull();
+    const panelEl = () => document.querySelector<HTMLElement>('[data-panel-id="p-1"]')!;
+
+    // A longer range has a step past the 5 minute window, but its answer is still on its way.
+    const held = gate();
+    intercept((url, pass) => (url === "/api/monitoring/query/batch" ? held.opened.then(pass) : null));
+    await user.click(screen.getByRole("button", { name: "Last 6 hours" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Last 7 days" }));
+    await waitFor(() => expect(panelEl().dataset.stale).toBe("true"));
+    expect(screen.queryByText(/longer than the query's window/)).toBeNull();
+    expect(within(panelEl()).getByText("No data in this time range.")).toBeTruthy();
+    act(() => held.open());
+    expect(await screen.findByText(/longer than the query's window \[5m\]/)).toBeTruthy();
+    expect(panelEl().dataset.stale).toBeUndefined();
   });
 });
