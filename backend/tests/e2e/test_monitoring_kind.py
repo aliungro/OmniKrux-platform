@@ -206,10 +206,14 @@ def dashboard(client, id: str) -> dict:
     return response.json()
 
 
-def fill_in(text: str, document: dict, chosen: dict[str, str] | None = None) -> str:
+def fill_in(
+    text: str, document: dict, chosen: dict[str, str] | None = None, builtins: dict | None = None
+) -> str:
     """The query as the browser sends it: variables stand for every value (`.+`) unless `chosen`
     names one, the built-in ones for a one-hour range at step 30."""
-    values = {v["name"]: ".+" for v in document["variables"]} | (chosen or {}) | BUILTINS
+    values = (
+        {v["name"]: ".+" for v in document["variables"]} | (chosen or {}) | (builtins or BUILTINS)
+    )
     for name in sorted(values, key=len, reverse=True):
         text = text.replace("${" + name + "}", values[name]).replace("$" + name, values[name])
     return text
@@ -1248,6 +1252,8 @@ def test_update_from_source_with_no_change(client, cluster, tools, grafana_targe
 OTEL_NAMESPACE = "k8s_namespace_name"
 OTEL_POD = "k8s_pod_name"
 LOG_WINDOW = 6 * HOUR
+LOG_STEP = 60
+LOG_BUILTINS = {"__interval": "60s", "__rate_interval": "4m", "__range": "6h"}
 
 
 def ready_document(client, project: dict, key: str) -> dict:
@@ -1266,12 +1272,12 @@ def run_logs_panel(
         request = {
             "source_id": link_of(project, q["source"]["type"])["source_id"],
             "project_id": project["id"],
-            "query": fill_in(q["expr"], document, chosen),
+            "query": fill_in(q["expr"], document, chosen, LOG_BUILTINS),
         }
         if panel["type"] in ("bar", "table"):
             request |= {"kind": "instant", "time": now}
         else:
-            request |= {"kind": "range", "start": now - LOG_WINDOW, "end": now, "step": 60}
+            request |= {"kind": "range", "start": now - LOG_WINDOW, "end": now, "step": LOG_STEP}
         if panel["type"] == "logs":
             request["limit"] = 100
         requests.append(request)
@@ -1354,8 +1360,9 @@ def test_why_empty_on_the_cluster(client, both_project):
     throttled = "container_cpu_cfs_throttled_periods_total"
     present = query(client, project, "prometheus", kind="instant", query=f"count({throttled})")
     if present["series"]:
-        # The cluster collects it, so there is no missing-metric answer to check.
-        return
+        pytest.skip(
+            f"The cluster collects {throttled}, so there is no CPU throttling answer to check."
+        )
     answer = why_empty(client, project, "prometheus", query=throttled, metrics=[throttled])
     assert answer["reason"] == "missing_metric", answer
     assert "CPU throttling" in answer["message"], answer

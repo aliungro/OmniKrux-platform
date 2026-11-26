@@ -54,4 +54,4 @@ The remote `origin` is the private repository `aliungro/omnikrux-platform` (`htt
 
 ## Merging into main
 
-Merges into `main` are the owner's decision. Work happens on branches (and git worktrees under `.superpowers/worktrees/`); open or push the branch, say what it contains, and leave the merge to the owner. Do not tag from a branch that has not been merged unless the owner asks for it.
+Merges into `main` are the owner's decision. Work happens on branches (and in separate git worktrees); open or push the branch, say what it contains, and leave the merge to the owner. Do not tag from a branch that has not been merged unless the owner asks for it.
