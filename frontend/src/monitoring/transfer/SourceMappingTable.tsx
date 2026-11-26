@@ -22,6 +22,9 @@ export interface SourceMappingTableProps {
   selectRef?(key: string, el: HTMLSelectElement | null): void;
 }
 
+/** How a Grafana data source finds its project source (the suggestions' order, in a sentence). */
+export const MAPPING_SENTENCE = "Each Grafana data source goes to the project source with the same address or service; otherwise to the first source of its type. The table says which.";
+
 const LEAVE = "leave";
 const FIRST = "first";
 
@@ -41,6 +44,8 @@ export function SourceMappingTable({ refs, project, ownerKind, value, onChange, 
   const ids = useId();
   if (ownerKind === "group") return <p className={s.line}>{GROUP_LINE}</p>;
   return (
+    <>
+    {project !== null && <p className={s.line}>{MAPPING_SENTENCE}</p>}
     <table className={s.mapping}>
       <thead>
         <tr>
@@ -87,5 +92,6 @@ export function SourceMappingTable({ refs, project, ownerKind, value, onChange, 
         })}
       </tbody>
     </table>
+    </>
   );
 }

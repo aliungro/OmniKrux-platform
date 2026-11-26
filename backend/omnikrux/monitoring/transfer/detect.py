@@ -9,7 +9,9 @@ from omnikrux.monitoring.transfer.types import NEWER_FORMAT, TransferError  # no
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 FormatName = Literal["omnikrux_export", "omnikrux_dashboard", "grafana"]
 
-NOT_JSON = "This isn't valid JSON: {reason}. Check that the whole file or text was copied."
+NOT_JSON = "This isn't valid JSON: {reason}."
+NOT_JSON_AT = "This isn't valid JSON: line {line}, column {column}: {plain}."
+_PROPERTY_NAME = "Expecting property name enclosed in double quotes"
 TOO_LARGE = "This is larger than 10 MB. Export fewer dashboards at a time."
 UNKNOWN_FORMAT = (
     "This doesn't look like an OmniKrux export or a Grafana dashboard. "
@@ -28,7 +30,14 @@ def parse_import_text(text: str) -> object:
     try:
         return json.loads(text, parse_constant=_refuse_constant)
     except json.JSONDecodeError as e:
-        reason = f"{e.msg} (line {e.lineno}, column {e.colno})"
+        plain = (
+            "a property name needs double quotes"
+            if e.msg == _PROPERTY_NAME
+            else "it doesn't read as JSON"
+        )
+        raise TransferError(
+            422, "invalid_input", NOT_JSON_AT.format(line=e.lineno, column=e.colno, plain=plain)
+        ) from None
     except RecursionError:
         reason = "it is nested too deeply"
     except ValueError as e:

@@ -520,3 +520,51 @@ def test_long_descriptions_are_cut_and_said():
     assert not any(s.where == 'Panel "S2"' and s.what == "Description" for s in c.skipped)
     exact = convert_grafana({"description": "d" * 2000}, GrafanaContext(), key="d-1")
     assert not any(s.what == "Description" for s in exact.skipped)
+
+
+def test_skipped_panels_leave_no_hole():
+    """A panel the converter drops doesn't leave a gap: the panels below float up."""
+    from omnikrux.monitoring.transfer.grafana.layout import compact
+
+    bad = stat_panel(2, type="graph", targets=[], gridPos={"x": 0, "y": 2, "w": 24, "h": 6})
+    low = stat_panel(3, gridPos={"x": 0, "y": 8, "w": 24, "h": 2})
+    c = convert_grafana(
+        {
+            "title": "T",
+            "panels": [stat_panel(1, gridPos={"x": 0, "y": 0, "w": 24, "h": 2}), bad, low],
+        },
+        GrafanaContext(),
+        key="d-1",
+    )
+    ys = [(p["title"], p["layout"]["y"]) for p in c.doc["panels"]]
+    assert ys[0] == ("S1", 0) and all(y <= 2 for _, y in ys[1:])  # no empty rows between
+    moved = compact(
+        [
+            {"layout": {"x": 0, "y": 0, "w": 24, "h": 2}},
+            {"layout": {"x": 0, "y": 9, "w": 12, "h": 2}},
+            {"layout": {"x": 12, "y": 9, "w": 12, "h": 3}},
+        ]
+    )
+    assert [p["layout"]["y"] for p in moved] == [0, 2, 2]
+
+
+def test_refs_inside_collapsed_rows_are_mapped():
+    inner = stat_panel(
+        2,
+        datasource={"type": "loki", "uid": "loki-1"},
+        targets=[{"refId": "A", "expr": '{app="api"}'}],
+    )
+    row = {"type": "row", "collapsed": True, "title": "Logs", "panels": [inner]}
+    ctx = GrafanaContext(
+        datasources=(
+            GrafanaDatasource("prom-1", "Prom", "prometheus", None, True),
+            GrafanaDatasource("loki-1", "Loki", "loki", "http://loki.logs.svc:3100", False),
+        )
+    )
+    c = convert_grafana(
+        {"title": "T", "panels": [stat_panel(1, datasource={"uid": "prom-1"}), row]}, ctx, key="d"
+    )
+    assert [p["title"] for p in c.doc["panels"]] == ["S1", "S2"]
+    assert {r.key for r in c.refs} == {"grafana:uid:prom-1", "grafana:uid:loki-1"}
+    [loki] = [r for r in c.refs if r.key == "grafana:uid:loki-1"]
+    assert (loki.type, loki.name, loki.url) == ("loki", "Loki", "http://loki.logs.svc:3100")

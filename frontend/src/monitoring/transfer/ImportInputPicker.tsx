@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, type DragEvent, type KeyboardEvent, type RefO
 import { grafanaDashboards, useGrafanaConnections, type GrafanaOut } from "./api";
 import { GrafanaDashboardList } from "./GrafanaDashboardList";
 import { GrafanaForm } from "./GrafanaForm";
-import { grafanaWhere } from "./grafanaLabels";
+import { connectionLabel } from "./grafanaLabels";
 import { sizeWords } from "./importModel";
 import s from "./ImportPage.module.css";
 
@@ -125,7 +125,7 @@ export function ImportInputPicker(p: ImportInputPickerProps) {
           <select ref={grafanaSelect} className={s.select} aria-label="Grafana" value={p.grafanaId}
             onChange={(e) => p.onGrafana(e.target.value)}>
             {p.grafanaId === "" && <option value="" disabled>{connections.isPending ? "Loading Grafana connections…" : "No Grafana connected"}</option>}
-            {list.map((g) => <option key={g.id} value={g.id}>{`${g.name} · ${grafanaWhere(g)}`}</option>)}
+            {list.map((g) => <option key={g.id} value={g.id}>{connectionLabel(g)}</option>)}
             <option value={CONNECTING}>Connect a Grafana…</option>
           </select>
           {p.grafanaId === CONNECTING && (

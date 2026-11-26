@@ -94,6 +94,7 @@ async def test_grafana_errors_never_carry_secrets(monitoring_app, fake_grafana_a
         "version": "11.3.0",
         "message": SIGN_IN_URL.format(name=name, status=401),
         "dashboards": None,
+        "same_as": None,
     }
     created = await add(http, body)
     rules = await app.state.monitoring.grafana_client.alert_rules(
@@ -181,13 +182,25 @@ async def test_the_rules_of_a_connection(kube_cluster, monitoring_app):
 async def test_test_reports_version_and_count(monitoring_app, fake_grafana_auth):
     http, _ = monitoring_app
     got = await http.post(f"{GRAFANA}/test", json=by_url(fake_grafana_auth.url))
-    assert got.json() == {"ok": True, "version": "11.3.0", "message": None, "dashboards": 3}
+    assert got.json() == {
+        "ok": True,
+        "version": "11.3.0",
+        "message": None,
+        "dashboards": 3,
+        "same_as": None,
+    }
     assert (await http.get(GRAFANA)).json() == []  # nothing stored
     assert [r for r in await monitoring_records(http) if r["kind"] == "grafana"] == []
     fake_grafana_auth.version = "13.3.0"
     created = await add(http, by_url(fake_grafana_auth.url, name="Ops Grafana"))
     tested = await http.post(f"{GRAFANA}/{created['id']}/test")
-    assert tested.json() == {"ok": True, "version": "13.3.0", "message": None, "dashboards": 3}
+    assert tested.json() == {
+        "ok": True,
+        "version": "13.3.0",
+        "message": None,
+        "dashboards": 3,
+        "same_as": None,
+    }
 
 
 async def test_not_grafana_is_said_plainly(monitoring_app, fake_grafana):
@@ -200,6 +213,7 @@ async def test_not_grafana_is_said_plainly(monitoring_app, fake_grafana):
         "version": None,
         "message": NOT_GRAFANA.format(name="Shop Grafana"),
         "dashboards": None,
+        "same_as": None,
     }
     listed = await http.post(f"{GRAFANA}/dashboards", json=body)
     assert refusal(listed) == (502, "grafana", NOT_GRAFANA.format(name="Shop Grafana"))
@@ -403,3 +417,54 @@ async def test_a_cluster_that_may_not_proxy_keeps_its_own_words(
     assert refusal(listed) == (502, "grafana", words)
     tested = (await http.post(f"{GRAFANA}/test", json=in_cluster(kube_cluster))).json()
     assert (tested["ok"], tested["message"]) == (False, words)
+
+
+async def test_removing_a_connection_names_the_other(
+    monitoring_app, fake_grafana_auth, linked_project
+):
+    """Two connections to one Grafana (compared by target, never by sign-in) name each other, a
+    test says so, and removing one hands its dashboards to the other."""
+    http, app = monitoring_app
+    services = app.state.monitoring
+    first = await add(http, by_url(fake_grafana_auth.url, name="Ops"))
+    alone = (await http.get(GRAFANA)).json()
+    assert [g["same_as"] for g in alone] == [None]
+    tested = (await http.post(f"{GRAFANA}/test", json=by_url(fake_grafana_auth.url))).json()
+    assert tested["ok"] is True and tested["same_as"] == "Ops"
+    second = await add(http, by_url(fake_grafana_auth.url + "/", name="Lab"))
+    by_name = {g["name"]: g for g in (await http.get(GRAFANA)).json()}
+    assert (by_name["Ops"]["same_as"], by_name["Lab"]["same_as"]) == ("Lab", "Ops")
+    own = (await http.post(f"{GRAFANA}/{first['id']}/test")).json()
+    assert own["same_as"] == "Lab"
+    dashboard = await http.post(
+        f"{API}/dashboards",
+        json={
+            "owner_kind": "project",
+            "owner_id": linked_project.project_id,
+            "spec": {"schemaVersion": 1, "title": "Imported", "panels": []},
+        },
+    )
+    dashboard_id = dashboard.json()["id"]
+    await services.origins.record(
+        OriginRecord(
+            dashboard_id=dashboard_id,
+            kind="grafana",
+            via="grafana",
+            label="Ops",
+            grafana_id=first["id"],
+            grafana_uid="api",
+            grafana_version=1,
+            export_id=None,
+            source_title="api",
+            mapping={},
+            digest="d",
+            imported_at=datetime.fromisoformat(first["created_at"]),
+            imported_version=1,
+        )
+    )
+    assert (await http.delete(f"{GRAFANA}/{first['id']}")).status_code == 204
+    origin = await services.origins.get(dashboard_id)
+    assert origin is not None and origin.grafana_id == second["id"]
+    [left] = (await http.get(GRAFANA)).json()
+    assert left["same_as"] is None and left["dashboards_imported"] == 1
+    assert (await http.post(f"{GRAFANA}/{left['id']}/test")).json()["same_as"] is None

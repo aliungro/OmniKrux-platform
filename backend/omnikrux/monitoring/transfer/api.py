@@ -49,6 +49,7 @@ from omnikrux.monitoring.transfer.grafana_store import (
     GrafanaSecrets,
     NewGrafana,
     UnknownGrafana,
+    same_grafana,
 )
 from omnikrux.monitoring.transfer.types import TransferError
 
@@ -235,6 +236,8 @@ class GrafanaOut(BaseModel):
     path_prefix: str
     auth: GrafanaAuthOut
     dashboards_imported: int
+    # The name of another connection that reaches this same Grafana (its target only).
+    same_as: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -246,6 +249,8 @@ class GrafanaTestOut(BaseModel):
     version: str | None
     message: str | None
     dashboards: int | None
+    # After a good test: the name of a saved connection that already reaches this Grafana.
+    same_as: str | None = None
 
 
 class GrafanaDashboardOut(BaseModel):
@@ -405,13 +410,27 @@ async def _details(registry: ClusterRegistry, cfg: GrafanaConfig) -> dict:
     return {"reach": cfg.reach, "target": _target(cfg, clusters), "auth": cfg.auth_type}
 
 
+async def _other_reaching(
+    services: MonitoringServices, cfg: GrafanaConfig, others: list[GrafanaConfig] | None = None
+) -> GrafanaConfig | None:
+    """The oldest other saved connection reaching the same Grafana as `cfg`."""
+    found = [
+        g
+        for g in (await services.grafana.list() if others is None else others)
+        if g.id != cfg.id and same_grafana(g, cfg)
+    ]
+    return min(found, key=lambda g: (g.created_at, g.id), default=None)
+
+
 async def _outs(
     services: MonitoringServices, registry: ClusterRegistry, configs: list[GrafanaConfig]
 ) -> list[GrafanaOut]:
     clusters = {c.id: c.name for c in await registry.list()}
     outs = []
+    saved = await services.grafana.list()
     for g in configs:
         c = g.cluster
+        other = await _other_reaching(services, g, saved)
         outs.append(
             GrafanaOut(
                 id=g.id,
@@ -432,6 +451,7 @@ async def _outs(
                     has_token=g.secrets.token is not None,
                 ),
                 dashboards_imported=len(await services.origins.from_grafana(g.id)),
+                same_as=other.name if other else None,
                 created_at=g.created_at,
                 updated_at=g.updated_at,
             )
@@ -576,8 +596,9 @@ async def remove_grafana(id: str, request: Request) -> Response:
     record = await begin_change(
         request, "grafana_remove", "grafana", old.name, {"dashboards_imported": imported}
     )
+    other = await _other_reaching(services, old)
     try:
-        await services.grafana.delete(id)
+        await services.grafana.delete(id, hand_over_to=other.id if other else None)
     except UnknownGrafana:
         await finish_change(request, record, False, GRAFANA_GONE)
         raise _gone() from None
@@ -604,8 +625,13 @@ async def _test(services: MonitoringServices, cfg: GrafanaConfig) -> GrafanaTest
         return GrafanaTestOut(
             ok=False, version=health.version, message=exc.message, dashboards=None
         )
+    other = await _other_reaching(services, cfg)
     return GrafanaTestOut(
-        ok=True, version=health.version, message=None, dashboards=len(found.items)
+        ok=True,
+        version=health.version,
+        message=None,
+        dashboards=len(found.items),
+        same_as=other.name if other else None,
     )
 
 

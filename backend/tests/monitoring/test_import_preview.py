@@ -18,8 +18,11 @@ from omnikrux.monitoring.transfer.mapping import (
     SAME_ADDRESS,
     SAME_NAME,
     SAME_SERVICE,
+    SAME_SERVICE_URL,
     SAME_SOURCE,
     Target,
+    apply_mapping,
+    cluster_service_of,
     suggest,
 )
 from omnikrux.monitoring.transfer.types import ExportedCluster, SourceRefFound
@@ -487,3 +490,107 @@ async def test_a_left_out_source_shows_in_the_preview(monitoring_app, linked_pro
     assert after["skipped_total"] == before["skipped_total"] + len(gone)
     assert now["digest"] == was["digest"]
     assert after["sources"] == before["sources"]
+
+
+def test_cluster_service_of():
+    assert cluster_service_of("http://prometheus-server.monitoring.svc:80") == (
+        "monitoring",
+        "prometheus-server",
+        80,
+    )
+    assert cluster_service_of("http://loki.logs.svc.cluster.local:3100/loki/api") == (
+        "logs",
+        "loki",
+        3100,
+    )
+    assert cluster_service_of("http://prom.mon.svc") == ("mon", "prom", 80)
+    assert cluster_service_of("https://prom.mon.svc/") == ("mon", "prom", 443)
+    assert cluster_service_of("HTTP://Prom.Mon.SVC:9090") == ("mon", "prom", 9090)
+    for other in (
+        "http://prom:9090",
+        "http://prom.mon:9090",
+        "http://prom.example.invalid:9090",
+        "http://a.b.c.svc:9090",
+        "ftp://prom.mon.svc",
+        "http://prom.mon.svc.example:80",
+        "prom.mon.svc",
+        "",
+    ):
+        assert cluster_service_of(other) is None, other
+
+
+def test_a_cluster_service_url_maps_to_the_in_cluster_source():
+    dev = ClusterTarget("c1", "monitoring", "prometheus-server", "80", "http")
+    sources = [
+        config("s-first", "First Prometheus", url="http://elsewhere.example.invalid:9090"),
+        config(
+            "s-other",
+            "Other port",
+            cluster=ClusterTarget("c1", "monitoring", "prometheus-server", "9090", "http"),
+        ),
+        config("s-dev", "In the dev cluster", cluster=dev),
+    ]
+    shop = Target("project", "p", "Shop", ("s-first", "s-other", "s-dev"))
+    found = ref("grafana:uid:prom", "Prometheus", url="http://prometheus-server.monitoring.svc:80")
+    out = suggest(found, shop, sources, {"c1": "kind-omnikrux-dev"})
+    assert (out.suggestion, out.reason) == (
+        "s-dev",
+        SAME_SERVICE_URL.format(namespace="monitoring", service="prometheus-server"),
+    )
+    assert out.reason == (
+        "Same service: the data source's address is monitoring/prometheus-server in the cluster."
+    )
+    # The port decides: no port after the same service is a different source.
+    nine = ref("g", "Zed", url="http://prometheus-server.monitoring.svc:9090")
+    assert suggest(nine, shop, sources, {}).suggestion == "s-other"
+    # A plain address match still wins over the service.
+    same = [config("s-url", "By URL", url="http://prometheus-server.monitoring.svc:80"), *sources]
+    shop2 = Target("project", "p", "Shop", ("s-first", "s-dev", "s-url"))
+    assert suggest(found, shop2, same, {}).reason == SAME_ADDRESS
+
+
+def test_skipped_panels_leave_no_hole():
+    from omnikrux.monitoring.transfer.origins import MappingChoice
+
+    def panel(pid, source, y):
+        return {
+            "id": pid,
+            "title": pid,
+            "layout": {"x": 0, "y": y, "w": 24, "h": 4},
+            "queries": [{"ref": "A", "source": {"type": "prometheus", "id": source}, "expr": "up"}],
+            "alert": None,
+        }
+
+    doc = {
+        "schemaVersion": 1,
+        "title": "T",
+        "variables": [],
+        "panels": [panel("p-1", "a", 0), panel("p-2", "b", 4), panel("p-3", "a", 8)],
+    }
+    out, skipped = apply_mapping(
+        doc,
+        {"b": MappingChoice(source_id=None, leave_out=True)},
+        owner_kind="project",
+        titles={"b": "B"},
+    )
+    assert [(p["id"], p["layout"]["y"]) for p in out["panels"]] == [("p-1", 0), ("p-3", 4)]
+    assert any(s.where == 'Panel "p-2"' for s in skipped)
+
+
+async def test_broken_json_reads_plainly(monitoring_app):
+    http, _ = monitoring_app
+
+    async def said(text: str) -> str:
+        r = await http.post(PREVIEW, json={"input": text_input(text, via="paste")})
+        assert r.status_code == 422
+        return r.json()["detail"]["message"]
+
+    assert await said("{nope") == (
+        "This isn't valid JSON: line 1, column 2: a property name needs double quotes."
+    )
+    assert await said('{"a":1,}') == (
+        "This isn't valid JSON: line 1, column 8: a property name needs double quotes."
+    )
+    assert await said('{\n  "a" 1\n}') == (
+        "This isn't valid JSON: line 2, column 7: it doesn't read as JSON."
+    )

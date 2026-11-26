@@ -103,6 +103,22 @@ def _same_url(a: str | None, b: str | None) -> bool:
     return a is not None and b is not None and a.rstrip("/") == b.rstrip("/")
 
 
+def same_grafana(a: GrafanaConfig, b: GrafanaConfig) -> bool:
+    """Whether both connections reach the same Grafana: the same address, or the same service
+    port in the same cluster. Targets only; the sign-in is never compared."""
+    if a.reach != b.reach:
+        return False
+    if a.cluster is not None and b.cluster is not None:
+        x, y = a.cluster, b.cluster
+        return (x.cluster_id, x.namespace, x.service, x.port) == (
+            y.cluster_id,
+            y.namespace,
+            y.service,
+            y.port,
+        )
+    return _same_url(a.url, b.url) and a.path_prefix.strip("/") == b.path_prefix.strip("/")
+
+
 class GrafanaStore:
     def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], box: SecretBox) -> None:
         self._sessionmaker = sessionmaker
@@ -284,9 +300,10 @@ class GrafanaStore:
             await _flush(session, row.name)
             return self._config(row)
 
-    async def delete(self, id: str) -> None:
+    async def delete(self, id: str, *, hand_over_to: str | None = None) -> None:
         """Remove the connection; the dashboards imported through it stay, and their origins
-        forget it (same transaction). UnknownGrafana."""
+        forget it or, with `hand_over_to`, read from that connection (same transaction).
+        UnknownGrafana."""
         async with self._sessionmaker.begin() as session:
             removed = await session.scalar(
                 delete(GrafanaRow).where(GrafanaRow.id == id).returning(GrafanaRow.id)
@@ -296,7 +313,7 @@ class GrafanaStore:
             await session.execute(
                 update(DashboardOriginRow)
                 .where(DashboardOriginRow.grafana_id == id)
-                .values(grafana_id=None)
+                .values(grafana_id=hand_over_to)
             )
 
 

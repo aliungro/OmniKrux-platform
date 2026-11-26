@@ -99,6 +99,8 @@ export interface GrafanaOut {
   path_prefix: string;
   auth: GrafanaAuthOut;
   dashboards_imported: number;
+  /** The name of another connection that reaches this same Grafana (its target only). */
+  same_as?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -108,6 +110,8 @@ export interface GrafanaTestOut {
   version: string | null;
   message: string | null;
   dashboards: number | null;
+  /** After a good test: a saved connection that already reaches this Grafana. */
+  same_as?: string | null;
 }
 
 export interface GrafanaDashboardOut {
@@ -299,6 +303,8 @@ export interface UpdatePreviewOut {
   source_label: string;
   source_version: number | null;
   previous_source_version: number | null;
+  /** The source is at the version this dashboard last took: nothing new, whatever was changed here. */
+  no_new_version?: boolean;
   digest: string;
 }
 

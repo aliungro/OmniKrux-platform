@@ -6,6 +6,7 @@ project already links (or at none, which reads the project's first source of the
 address, sign-in or header is ever invented from a file."""
 
 import copy
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from omnikrux.monitoring.dashboards.schema import OwnerKind, variables_used
 from omnikrux.monitoring.sources.types import SourceConfig
+from omnikrux.monitoring.transfer.grafana.layout import compact
 from omnikrux.monitoring.transfer.origins import MappingChoice
 from omnikrux.monitoring.transfer.types import SkippedItem, SourceRefFound
 
@@ -24,6 +26,9 @@ NO_TARGET = "Pick where the dashboards go first."
 SAME_SOURCE = "The same source."
 SAME_ADDRESS = "Same address."
 SAME_SERVICE = "Same service in the same cluster."
+SAME_SERVICE_URL = (
+    "Same service: the data source's address is {namespace}/{service} in the cluster."
+)
 SAME_NAME = "Same name."
 FIRST_OF_TYPE = "Uses {project}'s first {type} source ({name})."
 NONE_OF_TYPE = "{project} has no {type} source yet; its panels say so until you link one."
@@ -59,6 +64,25 @@ def _address(url: str | None, path_prefix: str = "") -> str | None:
     prefix = path_prefix.strip("/")
     base = url.rstrip("/")
     return f"{base}/{prefix}" if prefix else base
+
+
+_CLUSTER_URL = re.compile(
+    r"(https?)://([a-z0-9]([a-z0-9-]*[a-z0-9])?)\.([a-z0-9]([a-z0-9-]*[a-z0-9])?)"
+    r"\.svc(?:\.cluster\.local)?(?::([0-9]{1,5}))?(?:[/?#].*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def cluster_service_of(url: str) -> tuple[str, str, int] | None:
+    """The (namespace, service, port) an in-cluster address names:
+    `http(s)://{service}.{namespace}.svc[.cluster.local][:port][/...]`, the port 80 or 443 by
+    scheme when it is left out. Anything else is None."""
+    m = _CLUSTER_URL.fullmatch(url.strip())
+    if m is None:
+        return None
+    scheme, service, namespace, port = m.group(1), m.group(2), m.group(4), m.group(6)
+    number = int(port) if port else (443 if scheme.lower() == "https" else 80)
+    return namespace.lower(), service.lower(), number
 
 
 def ref_detail(ref: SourceRefFound) -> str | None:
@@ -121,6 +145,16 @@ def suggest(
             and _address(s.url, s.path_prefix) == wanted_address
         ):
             return out(s.id, SAME_ADDRESS)
+    named = cluster_service_of(ref.url) if ref.url else None
+    for s in linked:
+        if (
+            named is not None
+            and s.reach == "cluster"
+            and s.cluster is not None
+            and (s.cluster.namespace, s.cluster.service, s.cluster.port)
+            == (named[0], named[1], str(named[2]))
+        ):
+            return out(s.id, SAME_SERVICE_URL.format(namespace=named[0], service=named[1]))
     c = ref.cluster
     for s in linked:
         if c is None or c.name is None or s.reach != "cluster" or s.cluster is None:
@@ -227,7 +261,10 @@ def apply_mapping(
                 skipped.append(SkippedItem(f'Alert "{alert.get("name")}"', "The rule", why))
                 panel["alert"] = None
         kept_panels.append(panel)
-    out["panels"] = kept_panels
+    # A panel taken out leaves no hole: the rest float up, as in the editor.
+    out["panels"] = (
+        compact(kept_panels) if len(kept_panels) < len(out.get("panels", [])) else kept_panels
+    )
 
     for source in _sources(out):
         sid = source.get("id")

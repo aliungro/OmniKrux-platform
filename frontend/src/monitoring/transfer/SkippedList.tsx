@@ -3,6 +3,24 @@
 import type { SkippedOut } from "./api";
 import s from "./ImportReview.module.css";
 
+const STATE_WORDS: Record<string, string> = {
+  nodata: "it shows no data",
+  ok: "it counts as OK",
+  alerting: "it alerts",
+  keeplast: "it keeps its last state",
+  keepstate: "it keeps its last state",
+  error: "it shows an error",
+};
+
+/** Grafana's alert state fields in plain words; every other item as the converter wrote it. */
+export function plainWhat(what: string): string {
+  const m = /^(No data|Error) state (.+)$/.exec(what);
+  if (!m) return what;
+  const state = m[2];
+  const words = STATE_WORDS[state.toLowerCase().replace(/[\s_]/g, "")] ?? state;
+  return `${m[1] === "No data" ? "When there's no data" : "When the query fails"}: ${words}`;
+}
+
 export function SkippedList({ items }: { items: SkippedOut[] }) {
   const groups: { where: string; items: SkippedOut[] }[] = [];
   for (const item of items) {
@@ -17,7 +35,7 @@ export function SkippedList({ items }: { items: SkippedOut[] }) {
           <p className={s.skippedWhere}>{g.where}</p>
           <ul className={s.skippedItems}>
             {g.items.map((item, i) => (
-              <li key={i}><b>{item.what}</b> — {item.reason}</li>
+              <li key={i}><b>{plainWhat(item.what)}</b> — {item.reason}</li>
             ))}
           </ul>
         </div>

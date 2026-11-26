@@ -44,8 +44,9 @@ def test_parse_import_text_words():
     with pytest.raises(TransferError) as e:
         parse_import_text('{"a": ')
     assert e.value.message.startswith("This isn't valid JSON: ")
-    assert "line 1, column 7" in e.value.message and e.value.status == 422
-    assert e.value.message.endswith("Check that the whole file or text was copied.")
+    assert e.value.status == 422 and e.value.message == (
+        "This isn't valid JSON: line 1, column 7: it doesn't read as JSON."
+    )
     for text in ('{"a": NaN}', "[Infinity]", "[-Infinity]"):
         with pytest.raises(TransferError) as e:
             parse_import_text(text)

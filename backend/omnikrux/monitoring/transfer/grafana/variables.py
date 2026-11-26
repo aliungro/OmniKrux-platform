@@ -71,11 +71,15 @@ def _default(v: dict, multi: bool, include_all: bool) -> tuple[object, str | Non
     """The starting value and, when it had to be cut, the reason."""
     current = v.get("current")
     raw = None
+    text = None
     if isinstance(current, dict):
         raw = current.get("value", current.get("text"))
+        text = current.get("text")
     items = raw if isinstance(raw, list) else [raw]
     values = [i for i in items if isinstance(i, str) and i != ""]
-    if "$__all" in values:
+    texts = text if isinstance(text, list) else [text]
+    # Nothing chosen, Grafana's "All" value or the text "All" all mean All (when it is offered).
+    if not values or "$__all" in values or "All" in texts:
         return ("all" if include_all else []), None
     if len(values) > 1 and not multi:
         return values[:1], "A variable that isn't multi-value starts with one value."

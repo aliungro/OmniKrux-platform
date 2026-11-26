@@ -17,8 +17,8 @@ import {
   type GrafanaAuth, type GrafanaAuthIn, type GrafanaIn, type GrafanaOut, type GrafanaPatch,
 } from "./api";
 import {
-  ADDRESS_EXAMPLE, AUTH_LABELS, BASIC_NEEDS, CLUSTER_ANONYMOUS, CLUSTER_PICK, DISCARD_CONNECTION, KEEP_SECRET, TOKEN_NEEDED,
-  RETYPE_TO_TEST, URL_RULE, testWords,
+  ADDRESS_EXAMPLE, AUTH_LABELS, BASIC_NEEDS, CLUSTER_ANONYMOUS, CLUSTER_DEFAULTS, CLUSTER_PICK, DISCARD_CONNECTION, KEEP_SECRET, TOKEN_NEEDED,
+  RETYPE_TO_TEST, URL_RULE, enterWords, sameGrafanaWords, testWords,
 } from "./grafanaLabels";
 import s from "./GrafanaForm.module.css";
 
@@ -62,9 +62,9 @@ function startOf(initial: GrafanaOut | undefined, preset: Partial<GrafanaIn> | u
     reach: from.reach ?? "url",
     url: from.url ?? "",
     clusterId: from.cluster_id ?? "",
-    namespace: from.namespace ?? "",
-    service: from.service ?? "",
-    port: from.port ?? "",
+    namespace: from.namespace ?? CLUSTER_DEFAULTS.namespace,
+    service: from.service ?? CLUSTER_DEFAULTS.service,
+    port: from.port ?? CLUSTER_DEFAULTS.port,
     https: from.scheme === "https",
     // Editing, the name field stays empty: the placeholder shows the current one.
     name: initial ? "" : (preset?.name ?? ""),
@@ -104,7 +104,8 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string; same?: string | null } | null>(null);
+  const fieldRefs = useRef<Record<"namespace" | "service" | "port", HTMLInputElement | null>>({ namespace: null, service: null, port: null });
 
   const changed = password !== "" || token !== "" || JSON.stringify(plain) !== JSON.stringify(start);
   const guard = useLeaveGuard(cancelRef, changed, busy, leave ? { tabId: leave.tabId, title: leave.title, page: leave.page } : undefined);
@@ -197,6 +198,15 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
     if (busyRef.current || testing || retype) return;
     setError(null);
     setResult(null);
+    // A picked cluster with a field left empty: the field is named and takes the keyboard.
+    if (byCluster && plain.clusterId !== "") {
+      const empty = (["namespace", "service", "port"] as const).find((f) => plain[f].trim() === "");
+      if (empty) {
+        setError(enterWords(empty));
+        fieldRefs.current[empty]?.focus();
+        return;
+      }
+    }
     const built = build();
     if (typeof built === "string") return setError(built);
     const run = ++testRun.current;
@@ -204,7 +214,7 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
     try {
       // As entered; a rename that leans on the stored secret tests the saved connection.
       const out = initial && leansOnStored ? await testGrafana(initial.id) : await testNewGrafana(built.body);
-      if (run === testRun.current) setResult(testWords(out));
+      if (run === testRun.current) setResult({ ...testWords(out), ...(out.ok && out.same_as ? { same: out.same_as } : {}) });
     } catch (err) {
       if (run === testRun.current) setResult({ ok: false, text: failure(err, "test again") });
     } finally {
@@ -248,17 +258,17 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
           </div>
           <div className={s.field}>
             <label htmlFor={`${ids}-ns`}>Namespace</label>
-            <input id={`${ids}-ns`} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="monitoring"
+            <input id={`${ids}-ns`} ref={(el) => { fieldRefs.current.namespace = el; }} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="monitoring"
               value={plain.namespace} onChange={(e) => edit({ namespace: e.target.value })} />
           </div>
           <div className={s.field}>
             <label htmlFor={`${ids}-svc`}>Service</label>
-            <input id={`${ids}-svc`} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="grafana"
+            <input id={`${ids}-svc`} ref={(el) => { fieldRefs.current.service = el; }} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="grafana"
               value={plain.service} onChange={(e) => edit({ service: e.target.value })} />
           </div>
           <div className={s.field}>
             <label htmlFor={`${ids}-port`}>Port</label>
-            <input id={`${ids}-port`} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="80"
+            <input id={`${ids}-port`} ref={(el) => { fieldRefs.current.port = el; }} className={`${s.input} ${s.mono}`} type="text" autoComplete="off" spellCheck={false} placeholder="80"
               value={plain.port} onChange={(e) => edit({ port: e.target.value })} />
           </div>
           <label className={s.check}>
@@ -306,6 +316,7 @@ export function GrafanaForm({ initial, preset, mode, onSaved, onCollect, onCance
 
       {error && <p className={s.error} role="alert">{error}</p>}
       {result && <p className={result.ok ? s.ok : s.error} role="status">{result.text}</p>}
+      {result?.same && <p className={s.hint}>{sameGrafanaWords(result.same)}</p>}
       {retype && <p id={`${ids}-retype`} className={s.hint}>{retype}</p>}
       <div className={s.actions}>
         {/* aria-disabled, not disabled: a pressed button keeps the keyboard while it waits. */}
