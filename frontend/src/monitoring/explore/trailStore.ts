@@ -9,7 +9,11 @@ export const TRAIL_SHOWN = 8;
 /** The longest text kept, as the tab's view keeps it. */
 const MAX_TEXT = 10000;
 
-export type TrailEntry = { expr: string; sourceId: string; at: number };
+/**
+ * One kept query. `sourceName` and `sourceType` are the source it ran on, as they were then: a chip
+ * can still name it, and its language is known, once the project no longer links that source.
+ */
+export type TrailEntry = { expr: string; sourceId: string; at: number; sourceName?: string; sourceType?: "prometheus" | "loki" };
 
 const entry = (x: unknown): x is TrailEntry => {
   if (x === null || typeof x !== "object") return false;
@@ -18,6 +22,14 @@ const entry = (x: unknown): x is TrailEntry => {
     && typeof sourceId === "string" && sourceId.length > 0
     && typeof at === "number" && Number.isFinite(at);
 };
+
+/** An entry's named fields; a source name or kind that doesn't read as one is dropped. */
+function kept(x: TrailEntry): TrailEntry {
+  const out: TrailEntry = { expr: x.expr, sourceId: x.sourceId, at: x.at };
+  if (typeof x.sourceName === "string" && x.sourceName.length > 0 && x.sourceName.length <= 200) out.sourceName = x.sourceName;
+  if (x.sourceType === "prometheus" || x.sourceType === "loki") out.sourceType = x.sourceType;
+  return out;
+}
 
 /** The text a query is compared by: trimmed, each run of spaces outside quotes one space. */
 export function normalizeQuery(expr: string): string {
@@ -60,7 +72,7 @@ export function readTrail(projectId: string): TrailEntry[] {
     if (!raw) return [];
     const data: unknown = JSON.parse(raw);
     if (!Array.isArray(data)) return [];
-    return once(data.filter(entry).map(({ expr, sourceId, at }) => ({ expr, sourceId, at }))).slice(-TRAIL_MAX);
+    return once(data.filter(entry).map(kept)).slice(-TRAIL_MAX);
   } catch {
     return [];
   }
@@ -69,7 +81,7 @@ export function readTrail(projectId: string): TrailEntry[] {
 /** Adds an entry at the end (an equal query, on any source, moves there as this one); the trail as it now is. */
 export function pushTrail(projectId: string, item: TrailEntry): TrailEntry[] {
   const key = normalizeQuery(item.expr);
-  const next = [...readTrail(projectId).filter((e) => normalizeQuery(e.expr) !== key), { ...item }].slice(-TRAIL_MAX);
+  const next = [...readTrail(projectId).filter((e) => normalizeQuery(e.expr) !== key), kept(item)].slice(-TRAIL_MAX);
   try {
     localStorage.setItem(TRAIL_PREFIX + projectId, JSON.stringify(next));
   } catch {

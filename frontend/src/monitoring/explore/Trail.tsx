@@ -14,11 +14,13 @@ const short = (text: string) => (text.length > SHORT ? `${text.slice(0, SHORT)}�
 
 /**
  * A chip's words: its (cut) text, plus ` · {source}` when it ran on another source than the one
- * shown; its title is the whole text and its source. A source the project no longer links has no
- * name to give.
+ * shown; its title is the whole text and its source. A source the project no longer links says so,
+ * by the name the trail kept when there is one.
  */
-export function trailWords(entry: Pick<TrailEntry, "expr">, sourceName: string | null, here: boolean): { text: string; title: string } {
-  const named = sourceName === null ? "" : ` · ${sourceName}`;
+export function trailWords(entry: Pick<TrailEntry, "expr">, sourceName: string | null, here: boolean, linked = true): { text: string; title: string } {
+  const named = linked
+    ? (sourceName === null ? "" : ` · ${sourceName}`)
+    : (sourceName === null ? " · source not linked" : ` · ${sourceName} (not linked)`);
   return { text: here ? short(entry.expr) : `${short(entry.expr)}${named}`, title: `${entry.expr}${named}` };
 }
 
@@ -82,7 +84,8 @@ export function Trail({ entries, currentKey, sourceId, sourceNames, note, onPick
         {entries.map((entry, i) => {
           const k = keys[i];
           const here = entry.sourceId === sourceId;
-          const words = trailWords(entry, Object.hasOwn(sourceNames, entry.sourceId) ? sourceNames[entry.sourceId] : null, here);
+          const linked = Object.hasOwn(sourceNames, entry.sourceId);
+          const words = trailWords(entry, linked ? sourceNames[entry.sourceId] : (entry.sourceName ?? null), here, linked);
           return (
             <button
               key={k}

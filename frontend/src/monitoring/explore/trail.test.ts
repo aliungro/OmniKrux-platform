@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { textLanguage } from "./languageHold";
 import { trailWords } from "./Trail";
 import { clearTrail, normalizeQuery, pushTrail, readTrail, TRAIL_MAX, TRAIL_PREFIX, TRAIL_SHOWN } from "./trailStore";
 
@@ -88,7 +89,32 @@ describe("trail chips", () => {
     const long = { ...entry, expr: `sum(rate(${"a".repeat(60)}[5m]))` };
     expect(trailWords(long, "P", false).text).toMatch(/^sum\(rate\(a+… · P$/);
     expect(trailWords(long, "P", false).title).toBe(`${long.expr} · P`);
-    // A source the project no longer links has no name to give.
-    expect(trailWords(entry, null, false)).toEqual({ text: "rate(x[5m])", title: "rate(x[5m])" });
+    // A source the project no longer links is named as such, by the name the trail kept if any.
+    expect(trailWords(entry, "Old Prometheus", false, false)).toEqual({
+      text: "rate(x[5m]) · Old Prometheus (not linked)", title: "rate(x[5m]) · Old Prometheus (not linked)",
+    });
+    expect(trailWords(entry, null, false, false)).toEqual({ text: "rate(x[5m]) · source not linked", title: "rate(x[5m]) · source not linked" });
+  });
+
+  it("the trail keeps the name and kind of the source a query ran on", () => {
+    pushTrail("p1", { expr: "up", sourceId: "s1", at: 1, sourceName: "Prom", sourceType: "prometheus" });
+    pushTrail("p1", { expr: "{a=\"b\"}", sourceId: "l1", at: 2 });
+    expect(readTrail("p1")).toEqual([
+      { expr: "up", sourceId: "s1", at: 1, sourceName: "Prom", sourceType: "prometheus" },
+      { expr: "{a=\"b\"}", sourceId: "l1", at: 2 },
+    ]);
+    // A damaged kind is dropped, never trusted.
+    localStorage.setItem(TRAIL_PREFIX + "p2", JSON.stringify([{ expr: "up", sourceId: "s1", at: 1, sourceName: 7, sourceType: "alertmanager" }]));
+    expect(readTrail("p2")).toEqual([{ expr: "up", sourceId: "s1", at: 1 }]);
+  });
+
+  it("a text's language is read from it only when it can't be anything else", () => {
+    expect(textLanguage("rate(http_requests_total[5m])")).toBe("PromQL");
+    expect(textLanguage("up")).toBe("PromQL");
+    expect(textLanguage('{app="api"} |= "error"')).toBe("LogQL");
+    expect(textLanguage('sum(rate({app="api"} | json [5m]))')).toBe("LogQL");
+    // A bare selector reads in both.
+    expect(textLanguage('{app="api"}')).toBeNull();
+    expect(textLanguage("")).toBeNull();
   });
 });

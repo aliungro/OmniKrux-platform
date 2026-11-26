@@ -422,13 +422,23 @@ describe("Explore", () => {
     const user = userEvent.setup();
     await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
     await screen.findByText("chart 1");
+    // The note's live region is there before anything is held, empty.
+    const region = document.querySelector<HTMLElement>("[data-explore-held] [role='status']");
+    expect(region).toBeTruthy();
+    expect(region!.textContent).toBe("");
     const sourceSelect = screen.getByRole("combobox", { name: "Source" });
     const before = batches(api).length;
     fireEvent.change(sourceSelect, { target: { value: "l1" } });
     expect(await screen.findByText(HELD)).toBeTruthy();
+    expect(screen.getByText(HELD)).toBe(region);
     await pause(450);
     // Nothing is sent to Loki, nothing is drawn and no selector is named.
     expect(batches(api)).toHaveLength(before);
+    // Ctrl+Enter while held sends nothing and keeps nothing.
+    fireEvent.keyDown(query(), { key: "Enter", ctrlKey: true });
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(readTrail("p1").filter((e) => e.sourceId === "l1")).toEqual([]);
     expect(screen.queryByText(/^chart /)).toBeNull();
     expect(screen.queryByText(/Logs from/)).toBeNull();
     expect(meta().textContent).not.toContain("✗");
@@ -475,6 +485,91 @@ describe("Explore", () => {
     await waitFor(() => expect(batches(api).at(-1)?.queries[0]).toMatchObject({ project_id: "p2", source_id: "l2", query: '{app="x"}' }));
     expect(batches(api).some((b) => b.queries[0].project_id === "p2" && (b.queries[0] as { source_id?: string }).source_id === "s2")).toBe(false);
     expect(screen.queryByText(/This query is/)).toBeNull();
+  });
+
+  it("a project with no source of the kept kind holds a LogQL query", async () => {
+    const HELD = "This query is LogQL, and s2 name reads PromQL, so it wasn't run. Write a PromQL query, or pick a Loki source.";
+    const api = installFakeMonitoringApi({
+      projects: [
+        { ...seedProject("p1", "Alpha"), links: [linkTo("s1"), linkTo("l1", "loki")] },
+        { ...seedProject("p2", "Beta"), links: [linkTo("s2")] },
+      ],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).some((b) => (b.queries[0] as { source_id?: string }).source_id === "l1")).toBe(true));
+    const before = batches(api).length;
+    fireEvent.change(screen.getByRole("combobox", { name: "Project" }), { target: { value: "p2" } });
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(screen.queryByText(/^chart /)).toBeNull();
+  });
+
+  it("a LogQL query held under a Prometheus source lists no lines either", async () => {
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("s1"), linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).length).toBeGreaterThan(0));
+    fireEvent.change(screen.getByRole("combobox", { name: "Source" }), { target: { value: "s1" } });
+    expect(await screen.findByText(/^This query is LogQL, and s1 name reads PromQL/)).toBeTruthy();
+    const before = batches(api).length;
+    // Even a Logs query typed while the main one is held waits with it.
+    fireEvent.change(screen.getByRole("textbox", { name: "Logs query" }), { target: { value: '{app="y"}' } });
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect(screen.queryByText(/Logs from/)).toBeNull();
+  });
+
+  it("a trail chip whose source is no longer linked is held, not run", async () => {
+    const HELD = "This query is PromQL, and l1 name reads LogQL, so it wasn't run. Write a LogQL query, or pick a Prometheus-compatible source.";
+    const api = installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "Shop"), links: [linkTo("l1", "loki")] }],
+      queryAnswers: new Proxy({} as Record<string, FakeQueryAnswer>, { get: () => one }),
+    }, async () => json([]));
+    pushTrail("p1", { expr: "rate(http_requests_total[5m])", sourceId: "gone", at: 1, sourceName: "Old Prometheus", sourceType: "prometheus" });
+    pushTrail("p1", { expr: "up", sourceId: "older", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "l1", expr: '{app="x"}' });
+    await waitFor(() => expect(batches(api).length).toBeGreaterThan(0));
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    // The chip names where it came from, and that the project no longer links it.
+    const named = within(trail).getByRole("button", { name: "rate(http_requests_total[5m]) · Old Prometheus (not linked)" });
+    expect(named.getAttribute("title")).toBe("rate(http_requests_total[5m]) · Old Prometheus (not linked)");
+    const unnamed = within(trail).getByRole("button", { name: "up · source not linked" });
+    expect(unnamed.textContent).toBe("up · source not linked");
+    const before = batches(api).length;
+    await user.click(named);
+    expect(query().value).toBe("rate(http_requests_total[5m])");
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    expect((screen.getByRole("combobox", { name: "Source" }) as HTMLSelectElement).value).toBe("l1");
+    // Its language is read from the text when the trail kept no source kind.
+    await user.click(within(trail).getByRole("button", { name: "up · source not linked" }));
+    expect(query().value).toBe("up");
+    expect(await screen.findByText(HELD)).toBeTruthy();
+    await pause(450);
+    expect(batches(api)).toHaveLength(before);
+    // Neither is kept again: it ran nowhere.
+    expect(readTrail("p1").map((e) => e.sourceId)).toEqual(["gone", "older"]);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("the switched note goes with the next query", async () => {
+    twoProjects({ "p1|up": three, "p1|rate(x[5m])": one });
+    pushTrail("p1", { expr: "rate(x[5m])", sourceId: "s3", at: 2 });
+    const user = userEvent.setup();
+    await openExplore({ page: "explore", project: "p1", source: "s1", expr: "up" });
+    await screen.findByText("chart 3");
+    const trail = screen.getByRole("toolbar", { name: "Recent queries" });
+    await user.click(within(trail).getByRole("button", { name: "rate(x[5m]) · s3 name" }));
+    const said = within(trail.parentElement as HTMLElement).getByRole("status");
+    await waitFor(() => expect(said.textContent).toBe("Switched to s3 name."));
+    fireEvent.change(query(), { target: { value: "rate(x[10m])" } });
+    expect(said.textContent).toBe("");
   });
 
   it("the added note goes with a project switch", async () => {

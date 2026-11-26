@@ -241,6 +241,33 @@ describe("Browse metrics and log streams", () => {
     expect(within(box).getByRole("group", { name: "pod" })).toBeTruthy();
   });
 
+  it("dropping a value of a label with many values hands the keyboard on", async () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => `pod-${i}`);
+    installFakeMonitoringApi({
+      projects: [{ ...seedProject("p1", "prod-east"), links: [linkTo("l1", "loki")] }],
+      catalogs: { p1: catalogOf("p1", source("l1", { source_type: "loki", built_at: BUILT, streams: [stream("namespace", ["demo", "web"]), stream("pod", sixty)] })) },
+      queryAnswers: new Proxy({} as never, { get: () => answer }),
+    }, async () => json([]));
+    const user = userEvent.setup();
+    await openExplore();
+    const box = await list();
+    // Pick a pod from the list: its line shows only that chip.
+    await user.click(await within(box).findByRole("option", { name: "pod = pod-1" }));
+    const only = await screen.findByRole("group", { name: "Only" });
+    const order = () => [...only.querySelectorAll<HTMLElement>("[data-label]")].map((el) => el.dataset.label);
+    expect(order()).toEqual(["pod", "namespace"]);
+    await user.click(within(only).getByRole("button", { name: "namespace=demo" }));
+    expect(query().value).toBe('{namespace="demo",pod="pod-1"}');
+    const pod = within(only).getByRole("button", { name: "pod=pod-1" });
+    pod.focus();
+    await user.keyboard("{Enter}");
+    // The pod is dropped, its line goes, and the keyboard moves to the next line's chip.
+    expect(query().value).toBe('{namespace="demo"}');
+    expect(order()).toEqual(["namespace"]);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(within(only).getByRole("button", { name: "namespace=demo" }));
+  });
+
   it("chips keep their order after an Only", async () => {
     const api = prom(catalogOf("p1", source("s1", {
       built_at: BUILT,

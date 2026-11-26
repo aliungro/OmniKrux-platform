@@ -42,6 +42,7 @@ import { LinkedLogs } from "./LinkedLogs";
 import { linkedLogSelector, logMarks } from "./logLinks";
 import { FAILED_TITLE, MetaLine, NO_SUCH_METRIC, QueryBar } from "./QueryBar";
 import { Trail, trailKey } from "./Trail";
+import { heldWords, languageOf, textLanguage, useLanguageHold, type Language } from "./languageHold";
 import { clearTrail, pushTrail, readTrail, TRAIL_SHOWN, type TrailEntry } from "./trailStore";
 import { EXPLORE_DEBOUNCE_MS, explorePanel, linesKey, useExploreRun, useLinesRun } from "./useExploreRun";
 import s from "./ExplorePage.module.css";
@@ -54,10 +55,6 @@ const SOURCE_WORDS = { prometheus: "Prometheus-compatible", loki: "Loki", alertm
 /** Under this width the list folds away behind a button. */
 const NARROW_QUERY = "(max-width: 959px)";
 const ADD_FIRST = "Run a query first.";
-/** A text written for the other language than the source's: it waits, unrun, until it fits. */
-export const LANGUAGE_HELD = "This query is {from}, and {source} reads {to}, so it wasn't run. Write a {to} query, or pick a {fromType} source.";
-type Language = "PromQL" | "LogQL";
-const LANGUAGE_SOURCES: Record<Language, string> = { PromQL: "Prometheus-compatible", LogQL: "Loki" };
 const DEFAULT_PANEL_TITLE = "Explore query";
 /** A text that can run: it reads as one query (balanced, and not several on separate lines). */
 const runnable = (text: string) => quickCheck(text) === null && !severalQueries(text);
@@ -135,26 +132,10 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const projectQuery = useQuery({ queryKey: projectKey(project ?? ""), queryFn: () => getProject(project as string), enabled: project !== null });
   const projectOut = project !== null && projectQuery.data?.id === project ? projectQuery.data : null;
   const source = projectOut ? defaultExploreSource(projectOut, sourceId, keepType) : null;
-  const language: Language = source?.source_type === "loki" ? "LogQL" : "PromQL";
-
-  // --- a text in the other language is held (C1) ------------------------------------------------
-  // The language last seen on a source (none while a project loads), and the text a trail chip
-  // brought with its own source (it fits that source, so it is never held).
-  const sourceLanguage: Language | null = source ? language : null;
-  const [held, setHeld] = useState<{ expr: string; from: Language } | null>(null);
-  const [languageSeen, setLanguageSeen] = useState<Language | null>(sourceLanguage);
-  const broughtText = useRef<string | null>(null);
-  if (sourceLanguage !== null && sourceLanguage !== languageSeen) {
-    setLanguageSeen(sourceLanguage);
-    if (languageSeen !== null) {
-      if (held !== null && held.expr === expr && held.from === sourceLanguage) setHeld(null);
-      else if (expr.trim() !== "" && broughtText.current !== expr && !(held !== null && held.expr === expr)) setHeld({ expr, from: languageSeen });
-    }
-  }
-  // Any other text ends the hold.
-  if (held !== null && held.expr !== expr) setHeld(null);
-  useEffect(() => { broughtText.current = null; });
-  const holding = held !== null && held.expr === expr && sourceLanguage !== null && held.from !== sourceLanguage;
+  const language: Language = source ? languageOf(source.source_type) : "PromQL";
+  // A text in the other language is held (C1): nothing runs or is kept until it fits.
+  const languageHold = useLanguageHold(source, expr);
+  const { held, holding } = languageHold;
   const kind = source?.source_type === "loki" && !isLogQlMetric(expr) ? "logs" : "metrics";
   const projects = useMemo(() => [...(tree.data?.projects ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [tree.data]);
   const projectName = projects.find((p) => p.id === project)?.name ?? projectOut?.name ?? "";
@@ -205,11 +186,18 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const [trailVersion, setTrailVersion] = useState(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const trail = useMemo(() => (project ? readTrail(project) : []), [project, trailVersion]);
+  // Each entry keeps its source's name and kind, so a chip can still say where it ran (and in
+  // which language) once the project no longer links that source.
+  const projectLinks = projectOut?.links;
   const record = useCallback((entry: Omit<TrailEntry, "at">) => {
     if (!project || entry.expr.trim() === "") return;
-    pushTrail(project, { ...entry, at: Date.now() });
+    const link = projectLinks?.find((l) => l.source_id === entry.sourceId && isQueryable(l.source_type));
+    const named = link && (link.source_type === "prometheus" || link.source_type === "loki")
+      ? { sourceName: link.source_name, sourceType: link.source_type }
+      : {};
+    pushTrail(project, { ...entry, ...named, at: Date.now() });
     setTrailVersion((n) => n + 1);
-  }, [project]);
+  }, [project, projectLinks]);
   // A run that answered with data, with its text left alone for two seconds, is worth keeping (an
   // empty, refused or failed run isn't: half-typed text ends that way). A log query's run is its
   // lines' (below).
@@ -223,20 +211,30 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   // What a pick from the trail did that the page doesn't show by itself (another source).
   const [switched, setSwitched] = useState<string | null>(null);
   const pickTrail = (entry: TrailEntry) => {
-    record(entry);
     setExpr(entry.expr);
-    broughtText.current = entry.expr;
-    // A source the project no longer links is never guessed at: the source shown stays.
-    const other = entry.sourceId !== source?.source_id ? queryable.find((l) => l.source_id === entry.sourceId) : undefined;
+    const here = entry.sourceId === source?.source_id;
+    const other = here ? undefined : queryable.find((l) => l.source_id === entry.sourceId);
     setSwitched(other ? `Switched to ${other.source_name}.` : null);
-    if (other) {
-      // Another source has another list.
-      setSourceId(other.source_id);
-      setBuilder(EMPTY_BUILDER);
-    } else {
-      followText(entry.expr);
+    if (here || other) {
+      record(entry);
+      // It comes with its own source, so it fits: never held.
+      languageHold.bring(entry.expr);
+      if (other) {
+        // Another source has another list.
+        setSourceId(other.source_id);
+        setBuilder(EMPTY_BUILDER);
+      } else {
+        followText(entry.expr);
+      }
+      runNow();
+      return;
     }
-    runNow();
+    // A source the project no longer links is never guessed at: the source shown stays, and a text
+    // that doesn't fit it is held like any other (nothing runs, nothing is kept).
+    followText(entry.expr);
+    const from = entry.sourceType ? languageOf(entry.sourceType) : textLanguage(entry.expr);
+    if (from !== null && from !== language) languageHold.hold(entry.expr, from);
+    else runNow();
   };
   const clearAll = () => {
     if (!project) return;
@@ -364,6 +362,8 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
       record({ expr, sourceId: source.source_id });
     }
     if (action.type === "pickMetric" || action.type === "pickStream") setPickSeq((n) => n + 1);
+    // A chip is a new query: what the last trail pick switched no longer describes it.
+    setSwitched(null);
     setBuilder(next);
     // The same text again has nothing to run.
     if (text === expr) return;
@@ -380,6 +380,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   }
   const onType = (text: string) => {
     setExpr(text);
+    setSwitched(null);
     followText(text);
   };
   const pickedMetric = builder.metric === null ? null : (metrics.find((m) => m.name === builder.metric) ?? null);
@@ -594,7 +595,7 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
   const current = source && shown.some((e) => e.sourceId === source.source_id && trailKey(e) === fieldKey) ? fieldKey : "";
   const sourceNames = Object.fromEntries(queryable.map((l) => [l.source_id, l.source_name]));
   const heldNote = holding && held && source
-    ? LANGUAGE_HELD.replace("{from}", held.from).replace("{source}", source.source_name).replaceAll("{to}", language).replace("{fromType}", LANGUAGE_SOURCES[held.from])
+    ? heldWords(held, source.source_name, language)
     : null;
   const clearHeld = () => {
     onType("");
@@ -736,12 +737,11 @@ function Explore({ explore, write, nav, tabId, replaceTabView, openInNewTab }: E
                 onOnly={(label, value) => applyBuilder({ type: "only", label, value })} />
             )}
             <MetaLine state={state} expr={expr} kind={kind} lines={kind === "logs" ? lines : undefined} missing={kind === "logs" ? null : missingMetric} />
-            {heldNote && (
-              <div className={s.held} data-explore-held="">
-                <p className={s.heldText} role="status">{heldNote}</p>
-                <button type="button" className={s.retry} onClick={clearHeld}>Clear the query</button>
-              </div>
-            )}
+            {/* The live region is always there (empty while nothing is held), so the note is read when it comes. */}
+            <div className={heldNote ? s.held : undefined} data-explore-held="">
+              <p className={s.heldText} role="status">{heldNote ?? ""}</p>
+              {heldNote && <button type="button" className={s.retry} onClick={clearHeld}>Clear the query</button>}
+            </div>
             <RecommendationBar context={recContext} scope={`explore:${project}`} onApply={applyRec}
               onDone={() => queryField.current?.focus()} />
             <div className={s.result}>{result}</div>

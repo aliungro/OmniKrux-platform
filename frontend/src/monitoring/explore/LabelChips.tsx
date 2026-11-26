@@ -166,10 +166,24 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
     focusNext.current = { set, at: SHOWN_VALUES };
     setOpened((o) => new Set(o).add(set));
   };
-  // A chip that goes away with the keyboard on it hands it to its line's "more", else its first chip.
-  const keepFocusIn = (set: string) => {
-    const el = [...(root.current?.querySelectorAll<HTMLElement>("[data-set]") ?? [])].find((x) => x.dataset.set === set);
-    (el?.querySelector<HTMLElement>("[data-more]") ?? el?.querySelector<HTMLElement>("button"))?.focus();
+  // A chip that goes away with the keyboard on it hands it to its line's "more", else to another
+  // chip of its line. A line that goes with it (a label too fine for chips, kept only while a value
+  // of it was chosen) hands it to the next line's first chip, else the one before, else the first
+  // chip left: never to <body>.
+  const keepFocusIn = (set: string, lineGoes: boolean) => {
+    const sets = [...(root.current?.querySelectorAll<HTMLElement>("[data-set]") ?? [])];
+    const at = sets.findIndex((x) => x.dataset.set === set);
+    const el = sets[at];
+    const firstOf = (x: HTMLElement | undefined) => x?.querySelector<HTMLElement>("button") ?? null;
+    if (!lineGoes) {
+      (el?.querySelector<HTMLElement>("[data-more]") ?? firstOf(el))?.focus();
+      return;
+    }
+    const others = [...sets.slice(at + 1), ...sets.slice(0, Math.max(0, at)).reverse()];
+    for (const x of others) {
+      const b = firstOf(x);
+      if (b) { b.focus(); return; }
+    }
   };
 
   // A hand-edited query isn't what the chips say: none shows as pressed.
@@ -181,7 +195,8 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
   const splitFirst = splitLabels.slice(0, SHOWN_VALUES);
   const splitShown = splitOpen ? splitLabels
     : builder.split !== null && splitLabels.includes(builder.split) && !splitFirst.includes(builder.split) ? [...splitFirst, builder.split] : splitFirst;
-  const onlyLines = (lines ?? []).filter((l) => l.label !== builder.split);
+  // A label too fine for chips has a line only while a value of it is chosen.
+  const onlyLines = (lines ?? []).filter((l) => l.label !== builder.split && (!l.wide || Object.hasOwn(builder.only, l.label)));
   const loadingAny = lines === null || candidates.some((l) => valuesOf(l).loading);
 
   return (
@@ -220,7 +235,7 @@ export function LabelChips({ builder, labels, loki, known, read, onSplit, onOnly
                     <button key={v} type="button" className={s.chip} title={`${label}=${v}`} aria-pressed={live && chosen === v}
                       onClick={() => {
                         // A value shown only because it was chosen has no chip once it is off.
-                        if (live && chosen === v && !first.includes(v)) keepFocusIn(label);
+                        if (live && chosen === v && !first.includes(v)) keepFocusIn(label, wide);
                         onOnly(label, v);
                       }}>{`${label}=${v}`}</button>
                   ))}
