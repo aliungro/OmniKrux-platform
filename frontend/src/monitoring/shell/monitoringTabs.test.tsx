@@ -59,6 +59,39 @@ describe("Monitoring tab strip", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("the active tab is brought into view again when its name changes or the strip resizes", async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this); });
+    vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(2400);
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(900);
+    const resized: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private cb: () => void) {}
+      observe() { resized.push(this.cb); }
+      disconnect() {}
+      unobserve() {}
+    });
+    installFakeMonitoringApi({ projects: [seedProject("p1", LONG)] });
+    const views: MonitoringView[] = Array.from({ length: 12 }, () => ({ page: "home" }));
+    renderMonitoringApp({ tabs: tabsWith(...views) });
+    await waitFor(() => expect(tabs()).toHaveLength(12));
+    fireEvent.click(tabs()[11]);
+    expect(tabs()[11].getAttribute("aria-selected")).toBe("true");
+
+    // Home opens the long-named project in the same tab: the tab grows and is brought into view.
+    scrolled.length = 0;
+    fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${LONG}`) }));
+    await waitFor(() => expect(tabs()[11].textContent).toBe(LONG));
+    await waitFor(() => expect(scrolled.some((el) => el.contains(tabs()[11]))).toBe(true));
+    expect(document.activeElement).not.toBe(document.body);
+
+    // The strip gets narrower (the window shrinks): the active tab is brought into view again.
+    scrolled.length = 0;
+    expect(resized.length).toBeGreaterThan(0);
+    for (const cb of resized) cb();
+    expect(scrolled.some((el) => el.contains(tabs()[11]))).toBe(true);
+  });
+
   it("tabs that fit are never scrolled", async () => {
     const calls = vi.fn();
     Element.prototype.scrollIntoView = calls;

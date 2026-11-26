@@ -27,12 +27,27 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
   const [refocus, setRefocus] = useState(false);
   useEffect(() => setFocused(activeIndex), [activeIndex, tabs.tabs.length]);
   // Only when the tabs don't fit their list; never smooth (the strip jumps to the tab, with or
-  // without reduced motion).
-  useEffect(() => {
-    const tab = refs.current.get(tabs.active)?.parentElement;
+  // without reduced motion). Again when the active tab's name changes (a page opened in it, a
+  // project read) and when the list's size changes (the window, the tab count), so it never sits
+  // half outside the strip with its × hidden.
+  const listRef = useRef<HTMLDivElement>(null);
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.active);
+  const activeLabel = activeTab ? labelFor(activeTab.view, activeTab.id) : "";
+  const activeId = useRef(tabs.active);
+  activeId.current = tabs.active;
+  const showActive = useRef(() => {
+    const tab = refs.current.get(activeId.current)?.parentElement;
     const list = tab?.parentElement;
     if (list && list.scrollWidth > list.clientWidth) tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [tabs.active]);
+  });
+  useEffect(() => showActive.current(), [tabs.active, activeLabel]);
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => showActive.current());
+    ro.observe(list);
+    return () => ro.disconnect();
+  }, []);
   // A closed tab's button is gone: the keyboard lands on the tab that is now active.
   useEffect(() => {
     if (!refocus) return;
@@ -60,7 +75,7 @@ export function MonitoringTabs({ tabs, labelFor, colorFor, onActivate, onClose, 
 
   return (
     <div className={s.strip}>
-      <div className={m.list} role="tablist" aria-label="Monitoring tabs">
+      <div ref={listRef} className={m.list} role="tablist" aria-label="Monitoring tabs">
       {tabs.tabs.map((tab, i) => {
         const label = labelFor(tab.view, tab.id);
         const active = tab.id === tabs.active;
