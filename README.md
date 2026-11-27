@@ -75,6 +75,16 @@ FastAPI and Python on the backend, React and TypeScript on the frontend, shipped
 
 OmniKrux is in early alpha and changes quickly. Each app has its own versions: see the [tags](https://github.com/aliungro/OmniKrux-platform/tags).
 
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it explains how changes are reviewed and the [Contributor License Agreement](CLA.md) you sign on your first pull request.
+
 ## Security
 
 Please report security problems privately, as described in [SECURITY.md](SECURITY.md), not in a public issue.
+
+## License
+
+OmniKrux is free and open source under the [GNU Affero General Public License v3.0](LICENSE). You can use it, run it for your company and change it. If you offer a modified version to others, including as a hosted service, you must share your changes under the same license.
+
+Need a commercial license without these terms? Open an issue and ask.
