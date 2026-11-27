@@ -9,7 +9,7 @@
 ## Checklist
 
 - [ ] One change per pull request, linked to an issue (unless it is a small fix).
-- [ ] Tests added or updated, and the backend and frontend checks pass.
+- [ ] Tests added or updated, and the backend and frontend checks pass locally (docs/guide/developer/testing.md).
 - [ ] The matching guide in `docs/guide` is updated if people will see a difference.
 - [ ] No secrets, kubeconfigs, tokens or private names anywhere in the change.
 - [ ] I have signed the Contributor License Agreement (the bot asks on your first pull request).
