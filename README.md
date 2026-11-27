@@ -1,5 +1,12 @@
 <p align="center">
-  <img src="docs/assets/omnikrux-banner.svg" alt="OmniKrux: one place for everything" width="100%">
+  <a href="https://omnikrux.com"><img src="docs/assets/omnikrux-banner.svg" alt="OmniKrux: one place for everything" width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://omnikrux.com"><b>omnikrux.com</b></a>
+  &nbsp;·&nbsp; <a href="#quick-start">Quick start</a>
+  &nbsp;·&nbsp; <a href="docs/guide/README.md">Documentation</a>
+  &nbsp;·&nbsp; <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 OmniKrux is a web console for your infrastructure that runs on your own machine as one Docker image. Point it at your kubeconfig and cloud logins, and it shows every cluster in one place: what is running, what is failing, its logs and metrics, and safe ways to change it.
