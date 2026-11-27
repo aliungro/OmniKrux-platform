@@ -80,7 +80,7 @@ FastAPI and Python on the backend, React and TypeScript on the frontend, shipped
 
 ## Status
 
-OmniKrux is in early alpha and changes quickly. Each app has its own versions: see the [tags](https://github.com/aliungro/OmniKrux-platform/tags).
+OmniKrux is in early alpha and changes quickly. Each app has its own versions: see the [tags](https://github.com/omnikrux/omnikrux/tags).
 
 ## Contributing
 

@@ -2,7 +2,7 @@
 
 Version 1.0
 
-This agreement is between you and the maintainer of the OmniKrux project, the owner of the GitHub account `aliungro`, and anyone the maintainer transfers the project to (together, "the Maintainer"). It covers everything you contribute to OmniKrux. Please read it; signing it is a condition for having a contribution merged.
+This agreement is between you and the maintainer of the OmniKrux project, who owns the GitHub organization `omnikrux` (today the GitHub account `aliungro`), and anyone the maintainer transfers the project to (together, "the Maintainer"). It covers everything you contribute to OmniKrux. Please read it; signing it is a condition for having a contribution merged.
 
 ## 1. Definitions
 
