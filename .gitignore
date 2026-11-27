@@ -10,3 +10,17 @@ backend/omnikrux/static/
 docs/superpowers/
 docs/design/
 docs/apps/
+# Local tool and assistant settings, secrets and data that must never be committed.
+.claude/
+CLAUDE.md
+AGENTS.md
+.planning/
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+secret.key
+*.pem
+/kubeconfig
+*.kubeconfig

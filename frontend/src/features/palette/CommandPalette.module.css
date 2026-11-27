@@ -36,7 +36,7 @@
   border-bottom: 1px solid var(--rule);
 }
 
-/* The prompt: ":" in kind mode, as typed in k9s; a quieter chevron otherwise. */
+/* The prompt: ":" in kind mode; a quieter chevron otherwise. */
 .prompt {
   flex: none;
   width: 14px;

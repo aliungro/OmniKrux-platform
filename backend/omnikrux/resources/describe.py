@@ -1,4 +1,4 @@
-"""A pod and its events, turned into what `kubectl describe` shows, minus secret values, with a
+"""A pod and its events as structured details, minus secret values, with a
 `Link` to each object it points at (owner, node, service account, env sources, volumes)."""
 
 from datetime import UTC, datetime
