@@ -1,0 +1,112 @@
+name: Bug report
+description: Something in OmniKrux doesn't work as it should.
+title: "[Bug]: "
+labels: [bug, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Please **leave out secrets, kubeconfigs, tokens and private names**.
+        Found a security problem? Don't use this form: report it privately as described in SECURITY.md.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where in OmniKrux?
+      options:
+        - Kubernetes
+        - Monitoring
+        - Cloud accounts
+        - Audit
+        - Settings
+        - Running OmniKrux (Docker, setup)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw. Screenshots help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we make it happen?
+      description: The steps from a fresh start, as exact as you can.
+      placeholder: |
+        1. Open Monitoring
+        2. Choose ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: OmniKrux version
+      description: The release tag or commit you built from (for example monitoring-v0.1.0-alpha.1 or a short commit id).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runs-on
+    attributes:
+      label: How do you run OmniKrux?
+      options:
+        - Docker Desktop on Windows
+        - Docker Desktop on macOS
+        - Docker on Linux
+        - From source (backend and frontend dev servers)
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: cluster
+    attributes:
+      label: Kind of cluster (if it matters)
+      multiple: true
+      options:
+        - kind
+        - minikube
+        - k3d or k3s
+        - Amazon EKS
+        - Azure AKS
+        - Google GKE
+        - Oracle OKE
+        - Other or self-managed
+        - Not cluster related
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: Chrome 131, Firefox 133, Safari 18 ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The container's log lines around the problem (docker logs). Remove anything private first.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I searched the existing issues and this isn't one of them.
+          required: true
+        - label: I removed secrets, tokens and private names from everything above.
+          required: true

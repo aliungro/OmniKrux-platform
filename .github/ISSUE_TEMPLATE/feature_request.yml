@@ -1,0 +1,64 @@
+name: Feature request
+description: An idea for something OmniKrux should do.
+title: "[Feature]: "
+labels: [enhancement, needs triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Describing the problem you have helps more than describing a solution, so start there.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of OmniKrux?
+      options:
+        - Kubernetes
+        - Monitoring
+        - Cloud accounts
+        - Audit
+        - Settings
+        - Running OmniKrux (Docker, setup)
+        - Something new
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem do you want to solve?
+      description: What you are trying to do and what gets in the way today.
+      placeholder: When I ..., I have to ..., which ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like OmniKrux to do?
+      description: How it could work for you. Sketches and screenshots welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+      description: Workarounds or other ways you tried.
+
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to build it?
+      options:
+        - "Yes, I'd like to send a pull request"
+        - Maybe, with some guidance
+        - "No"
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you send it
+      options:
+        - label: I searched the existing issues and discussions and this isn't one of them.
+          required: true

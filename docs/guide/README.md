@@ -2,7 +2,7 @@
 
 OmniKrux is a local infrastructure console: a FastAPI backend and a React frontend, shipped as one Docker image. Today it has two apps, Kubernetes and Monitoring, plus the shared Audit and Settings pages.
 
-These guides describe what the code does now. The [project README](../../README.md) stays the full reference for run options, environment variables and troubleshooting notes.
+These guides describe what the code does now and are the full reference for run options, environment variables and troubleshooting. The [project README](../../README.md) is the short overview.
 
 ## For people using OmniKrux
 

@@ -40,7 +40,7 @@ export interface PaletteSelection {
   cluster: Cluster;
 }
 
-/** A leading ":" narrows any palette to kinds, as k9s's prompt does. */
+/** A leading ":" narrows any palette to kinds. */
 function splitQuery(query: string): { kindsOnly: boolean; q: string } {
   const m = /^\s*:/.exec(query);
   return m ? { kindsOnly: true, q: query.slice(m[0].length) } : { kindsOnly: false, q: query };

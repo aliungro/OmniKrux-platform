@@ -17,8 +17,6 @@ git clone https://github.com/aliungro/omnikrux-platform.git
 cd omnikrux-platform
 ```
 
-(The repository is private; use whatever access you have to it.)
-
 ## Backend
 
 The backend is a FastAPI app in `backend/omnikrux/`, managed with uv.

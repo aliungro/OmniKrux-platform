@@ -1,4 +1,4 @@
-/* The k9s-style key strip along the bottom of the console (Territories mockup). */
+/* The key strip along the bottom of the console (Territories mockup). */
 .keys {
   flex: none;
   border-top: 1px solid var(--rule);

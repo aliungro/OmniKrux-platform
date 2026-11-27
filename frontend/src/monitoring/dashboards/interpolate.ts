@@ -10,7 +10,7 @@ export type ResolvedVars = Record<string, { multi: boolean; value: VarValue }>;
 export const ALL_PATTERN = ".+";
 
 /**
- * The shortest `$__rate_interval`, in seconds. Grafana's value is four scrape intervals;
+ * The shortest `$__rate_interval`, in seconds: four scrape intervals.
  * Prometheus scrapes every minute by default, so four minutes holds four samples there and
  * survives one missed scrape. A shorter window can hold a single sample, and rate() is empty.
  */

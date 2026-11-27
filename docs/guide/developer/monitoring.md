@@ -758,7 +758,7 @@ Sources are named by keys, never by this instance's ids. **Never exported**: a p
 
 ### Detecting and converting
 
-`detect_format` is the one place a format is recognised, and so the place a new importer plugs in. It tells an export (by its `omnikrux` mark), a Grafana API answer (a `dashboard` object beside `meta`), a bare OmniKrux dashboard (panels with `queries` and no `gridPos`) and a bare Grafana dashboard (`panels`, `rows` or a `schemaVersion` of 2 or more); a list or anything else is refused in words. A new format adds a branch there, a converter that returns a `ConvertedDashboard` (the document, the source references it reads, the skipped items, its alerts as drafts and its problems) and a name in `FormatName`; preview and commit then work on it unchanged. Datadog, New Relic and Netdata dashboards are the importers we expect next.
+`detect_format` is the one place a format is recognised, and so the place a new importer plugs in. It tells an export (by its `omnikrux` mark), a Grafana API answer (a `dashboard` object beside `meta`), a bare OmniKrux dashboard (panels with `queries` and no `gridPos`) and a bare Grafana dashboard (`panels`, `rows` or a `schemaVersion` of 2 or more); a list or anything else is refused in words. A new format adds a branch there, a converter that returns a `ConvertedDashboard` (the document, the source references it reads, the skipped items, its alerts as drafts and its problems) and a name in `FormatName`; preview and commit then work on it unchanged.
 
 ### The Grafana converter
 
