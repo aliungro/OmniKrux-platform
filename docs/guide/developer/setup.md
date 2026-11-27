@@ -13,8 +13,8 @@
 ## Get the code
 
 ```bash
-git clone https://github.com/aliungro/omnikrux-platform.git
-cd omnikrux-platform
+git clone https://github.com/omnikrux/omnikrux.git
+cd omnikrux
 ```
 
 ## Backend

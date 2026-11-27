@@ -50,7 +50,7 @@ Its image is `omnikrux:monitoring-v0.1.0-alpha.1`. Push the branch the release c
 
 ## Where it goes
 
-The remote `origin` is the repository `aliungro/OmniKrux-platform` (`https://github.com/aliungro/OmniKrux-platform.git`). Releases are tags in that repository; the build above is a local image, and nothing in the repository publishes it to a registry.
+The remote `origin` is the repository `omnikrux/omnikrux` (`https://github.com/omnikrux/omnikrux.git`). Releases are tags in that repository; the build above is a local image, and nothing in the repository publishes it to a registry.
 
 ## Merging into main
 
