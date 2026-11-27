@@ -17,7 +17,9 @@ Anyone can open an issue or send a pull request from their own fork. Only the ma
 
 Open an issue with what you did, what you expected and what happened instead, plus your OmniKrux version or commit, how you run it (Docker, OS) and the kind of cluster. Leave out secrets, kubeconfigs and anything private.
 
-Security problems are different: report them privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+Security problems are different: report them privately as described in [SECURITY.md](SECURITY.md), never in a public issue. Questions and ideas that are not yet a clear request go to [Discussions](https://github.com/aliungro/OmniKrux-platform/discussions).
+
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Guidelines
 

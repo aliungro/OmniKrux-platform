@@ -1,0 +1,25 @@
+name: Documentation
+description: Something in the README or the guides is wrong, missing or unclear.
+title: "[Docs]: "
+labels: [documentation, needs triage]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Which page?
+      description: A link or the file name, for example docs/guide/user/monitoring.md.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong, missing or unclear?
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What should it say?
+      description: Your suggestion, if you have one.
